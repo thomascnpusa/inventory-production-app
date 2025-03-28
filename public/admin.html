@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
+                    <li class="nav-item admin-only">
+                        <a class="nav-link active" href="/admin.html">Admin</a>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <h1>Admin Dashboard</h1>
+        
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Sales Platforms Sync</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <h6>Shopify Integration</h6>
+                            <p>Sync orders from all Shopify stores (CNPPet, CNPUSA, Wholesale)</p>
+                            <button id="syncShopifyBtn" class="btn btn-primary">Sync Shopify Orders</button>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <h6>Amazon Integration</h6>
+                            <p>Sync orders from Amazon marketplace</p>
+                            <button id="syncAmazonBtn" class="btn btn-warning">Sync Amazon Orders</button>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <h6>Sync All Platforms</h6>
+                            <p>Sync orders from all configured platforms</p>
+                            <button id="syncAllBtn" class="btn btn-success">Sync All Platforms</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Sync Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="syncStatus" class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Platform</th>
+                                        <th>Orders</th>
+                                        <th>Customers</th>
+                                        <th>Total Sales</th>
+                                        <th>Last Order</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="syncStatusTable">
+                                    <tr>
+                                        <td colspan="5" class="text-center">Loading...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast for notifications -->
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="5000">
+            <div class="toast-header">
+                <strong class="me-auto" id="toastTitle">Notification</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body" id="toastMessage"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/auth.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('DOM loaded in admin.html');
+            
+            // Check authentication
+            try {
+                console.log('Checking authentication...');
+                if (!isAuthenticated()) {
+                    console.error('Not authenticated, redirecting to login');
+                    window.location.href = '/login.html';
+                    return;
+                }
+                
+                const user = getCurrentUser();
+                if (!user) {
+                    console.error('No user found, redirecting to login');
+                    window.location.href = '/login.html';
+                    return;
+                }
+                
+                console.log('User authenticated:', user);
+                
+                // Check if user has permission
+                if (user.role !== 'admin' && user.role !== 'manager') {
+                    console.error('User does not have permission:', user.role);
+                    alert('You do not have permission to access this page.');
+                    window.location.href = '/index.html';
+                    return;
+                }
+                
+                // Display user info
+                const userDisplay = document.getElementById('usernameDisplay');
+                if (userDisplay) {
+                    console.log('Setting user display:', user.username);
+                    userDisplay.textContent = `${user.username} (${user.role})`;
+                } else {
+                    console.error('User display element not found');
+                }
+                
+                // Load sync status
+                console.log('Loading sync status...');
+                loadSyncStatus();
+                
+                // Set up event listeners
+                console.log('Setting up event listeners');
+                document.getElementById('syncShopifyBtn').addEventListener('click', syncShopify);
+                document.getElementById('syncAmazonBtn').addEventListener('click', syncAmazon);
+                document.getElementById('syncAllBtn').addEventListener('click', syncAll);
+                document.getElementById('logoutBtn').addEventListener('click', logout);
+                
+                console.log('Admin page initialization complete');
+            } catch (error) {
+                console.error('Error initializing admin page:', error);
+                alert('Error initializing admin page: ' + error.message);
+            }
+        });
+        
+        async function loadSyncStatus() {
+            try {
+                console.log('Fetching sync status...');
+                const response = await authenticatedFetch('/api/sales/sync/status');
+                if (!response) {
+                    console.error('No response from sync status API');
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load sync status: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Sync status data received:', data);
+                
+                const tableBody = document.getElementById('syncStatusTable');
+                if (!tableBody) {
+                    console.error('Sync status table body not found');
+                    return;
+                }
+                
+                tableBody.innerHTML = '';
+                
+                if (data.length === 0) {
+                    console.log('No sync data available');
+                    tableBody.innerHTML = '<tr><td colspan="5" class="text-center">No sync data available</td></tr>';
+                    return;
+                }
+                
+                data.forEach(platform => {
+                    console.log('Rendering platform data:', platform);
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${platform.platform}</td>
+                        <td>${platform.total_orders}</td>
+                        <td>${platform.total_customers}</td>
+                        <td>$${parseFloat(platform.total_sales).toFixed(2)}</td>
+                        <td>${new Date(platform.latest_order).toLocaleDateString()}</td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+                
+                console.log('Sync status table updated');
+            } catch (error) {
+                console.error('Error loading sync status:', error);
+                showNotification('Error', 'Failed to load sync status: ' + error.message, 'danger');
+            }
+        }
+        
+        async function syncShopify() {
+            try {
+                console.log('Syncing Shopify...');
+                const button = document.getElementById('syncShopifyBtn');
+                button.disabled = true;
+                button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing...';
+                
+                const response = await authenticatedFetch('/api/v1/sync/shopify', {
+                    method: 'POST'
+                });
+                
+                if (!response) {
+                    console.error('No response from Shopify sync API');
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to sync Shopify orders: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('Shopify sync result:', result);
+                showNotification('Success', 'Shopify sync completed successfully', 'success');
+                loadSyncStatus();
+            } catch (error) {
+                console.error('Error syncing Shopify:', error);
+                showNotification('Error', 'Failed to sync Shopify: ' + error.message, 'danger');
+            } finally {
+                const button = document.getElementById('syncShopifyBtn');
+                button.disabled = false;
+                button.textContent = 'Sync Shopify Orders';
+            }
+        }
+        
+        async function syncAmazon() {
+            try {
+                console.log('Syncing Amazon...');
+                const button = document.getElementById('syncAmazonBtn');
+                button.disabled = true;
+                button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing...';
+                
+                const response = await authenticatedFetch('/api/v1/sync/amazon', {
+                    method: 'POST'
+                });
+                
+                if (!response) {
+                    console.error('No response from Amazon sync API');
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to sync Amazon orders: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('Amazon sync result:', result);
+                showNotification('Success', 'Amazon sync completed successfully', 'success');
+                loadSyncStatus();
+            } catch (error) {
+                console.error('Error syncing Amazon:', error);
+                showNotification('Error', 'Failed to sync Amazon: ' + error.message, 'danger');
+            } finally {
+                const button = document.getElementById('syncAmazonBtn');
+                button.disabled = false;
+                button.textContent = 'Sync Amazon Orders';
+            }
+        }
+        
+        async function syncAll() {
+            try {
+                console.log('Syncing all platforms...');
+                const button = document.getElementById('syncAllBtn');
+                button.disabled = true;
+                button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing...';
+                
+                const response = await authenticatedFetch('/api/v1/sync/all', {
+                    method: 'POST'
+                });
+                
+                if (!response) {
+                    console.error('No response from all platforms sync API');
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to sync all platforms: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                console.log('All platforms sync result:', result);
+                showNotification('Success', 'All platforms sync completed successfully', 'success');
+                loadSyncStatus();
+            } catch (error) {
+                console.error('Error syncing all platforms:', error);
+                showNotification('Error', 'Failed to sync all platforms: ' + error.message, 'danger');
+            } finally {
+                const button = document.getElementById('syncAllBtn');
+                button.disabled = false;
+                button.textContent = 'Sync All Platforms';
+            }
+        }
+        
+        function showNotification(title, message, type = 'info') {
+            console.log('Showing notification:', { title, message, type });
+            
+            // Just use a simple alert if the toast is causing issues
+            alert(title + ': ' + message);
+            
+            // Try to update sync status after notification
+            loadSyncStatus();
+        }
+    </script>
+</body>
+</html> 

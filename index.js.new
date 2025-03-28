@@ -1,0 +1,4341 @@
+const express = require('express');
+const dotenv = require('dotenv');
+const path = require('path');
+const { Pool } = require('pg');
+const shopifyIntegration = require('./shopify');
+const cron = require('node-cron');
+const salesSyncService = require('./services/salesSync');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
+const { convert, getUnitCategory } = require('./utils/unitConversion');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const bodyParser = require('body-parser');
+
+const { 
+    authenticateToken, 
+    checkPermission, 
+    createUser, 
+    loginUser, 
+    logoutUser,
+    ROLES 
+} = require('./middleware/auth');
+
+// Load environment variables
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Database connection
+const pgPool = new Pool({
+  user: process.env.PG_USER,
+  host: process.env.PG_HOST,
+  database: process.env.PG_DATABASE,
+  port: process.env.PG_PORT
+});
+
+// Test database connection and add necessary columns
+pgPool.query('SELECT NOW()', async (err, res) => {
+  if (err) {
+    console.error('Database connection error:', err);
+  } else {
+    console.log('Database connected successfully');
+    
+    try {
+      await pgPool.query(`
+        ALTER TABLE ProductionSteps 
+        ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS completed_by VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
+      `);
+      console.log('Added completion columns to ProductionSteps');
+      
+      await pgPool.query(`
+        ALTER TABLE ProductionOrders 
+        ADD COLUMN IF NOT EXISTS actual_yield DECIMAL,
+        ADD COLUMN IF NOT EXISTS completed_by VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP
+      `);
+      console.log('Added yield and completion columns to ProductionOrders');
+    } catch (error) {
+      console.error('Error adding columns:', error);
+    }
+  }
+});
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cors());
+app.use(cookieParser());
+app.use(session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: process.env.NODE_ENV === 'production' }
+}));
+
+// Request logger middleware with more detail for production orders
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    
+    // Special logging for production order routes
+    if (req.url.includes('/production-orders')) {
+        console.log('Production order route detected:');
+        console.log('  URL:', req.url);
+        console.log('  Method:', req.method);
+        console.log('  Headers:', req.headers);
+        console.log('  Body:', req.body);
+    }
+    
+    next();
+});
+
+// Security middleware
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+});
+
+// Serve static files from the 'public' directory
+app.use(express.static(path.join(__dirname, 'public'), {
+    maxAge: '1d', // Cache static assets for 1 day
+    etag: true,   // Enable ETag for caching
+    index: false  // Disable directory listing
+}));
+
+// Routes
+app.get('/', (req, res) => {
+    res.redirect('/login.html');
+});
+
+// Simple test endpoint to verify routing
+app.get('/api/test', (req, res) => {
+    console.log('Test endpoint called');
+    res.json({ message: 'API is working correctly' });
+});
+
+// Amazon sync endpoint
+app.post('/api/v1/sync/amazon', authenticateToken, async (req, res) => {
+    console.log('Amazon sync endpoint called');
+    try {
+        const amazonSyncService = require('./services/salesSync');
+        await amazonSyncService.syncAmazon();
+        res.json({ success: true, message: 'Amazon sync completed successfully' });
+    } catch (error) {
+        console.error('Error during Amazon sync:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Shopify sync endpoint
+app.post('/api/v1/sync/shopify', authenticateToken, async (req, res) => {
+    console.log('Shopify sync endpoint called');
+    try {
+        const shopifySyncService = require('./services/salesSync');
+        await shopifySyncService.syncShopify();
+        res.json({ success: true, message: 'Shopify sync completed successfully' });
+    } catch (error) {
+        console.error('Error during Shopify sync:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// All platforms sync endpoint
+app.post('/api/v1/sync/all', authenticateToken, async (req, res) => {
+    console.log('All platforms sync endpoint called');
+    try {
+        const allSyncService = require('./services/salesSync');
+        await allSyncService.syncAllPlatforms();
+        res.json({ success: true, message: 'All platforms sync completed successfully' });
+    } catch (error) {
+        console.error('Error during all platforms sync:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Sync status endpoint
+app.get('/api/sales/sync/status', authenticateToken, async (req, res) => {
+    console.log('Sync status endpoint called');
+    try {
+        const syncService = require('./services/salesSync');
+        const status = await syncService.getSyncStatus();
+        res.json(status);
+    } catch (error) {
+        console.error('Error getting sync status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/production-orders/simple', authenticateToken, checkPermission('create_production_order'), async (req, res) => {
+    console.log('Simple production order creation endpoint called');
+    console.log('Request body:', req.body);
+    const { product_sku, quantity, mmr_product_sku, mmr_version, due_date } = req.body;
+
+    const validatedFields = {
+        product_sku,
+        quantity: Number(quantity),
+        mmr_product_sku,
+        mmr_version: Number(mmr_version),
+        due_date: due_date || null
+    };
+    console.log('Validated fields:', validatedFields);
+
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const mmrCheck = await client.query(
+            `SELECT COUNT(*) as count 
+             FROM MMRs 
+             WHERE product_sku = $1 AND version = $2 AND is_active = TRUE`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+        console.log('MMR check result:', mmrCheck.rows[0], 'MMR exists:', mmrCheck.rows[0].count > 0);
+
+        if (mmrCheck.rows[0].count === '0') {
+            throw new Error('MMR not found or not active');
+        }
+
+        const mmrResult = await client.query(
+            `SELECT base_quantity FROM MMRs 
+             WHERE product_sku = $1 AND version = $2`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+        const scalingFactor = validatedFields.quantity / mmrResult.rows[0].base_quantity;
+
+        const ingredientsResult = await client.query(`
+            SELECT mi.*, ii.id as item_id, ii.unit_type as inventory_unit_type, ii.stock_level, ii.sku
+            FROM MMRIngredients mi 
+            JOIN InventoryItems ii ON mi.ingredient_sku = ii.sku 
+            WHERE mi.mmr_product_sku = $1 AND mi.mmr_version = $2`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+
+        const batchNumber = `P${new Date().toISOString().slice(2, 10).replace(/-/g, '')}${await getDailySequence(client, validatedFields.mmr_product_sku, validatedFields.mmr_version)}`;
+
+        const orderResult = await client.query(
+            `INSERT INTO ProductionOrders 
+            (product_sku, quantity, status, mmr_product_sku, mmr_version, mmr_base_quantity, finished_batch_number, due_date) 
+            VALUES ($1, $2, 'Pending', $3, $4, $5, $6, $7) 
+            RETURNING *`,
+            [validatedFields.product_sku, validatedFields.quantity, validatedFields.mmr_product_sku, validatedFields.mmr_version, mmrResult.rows[0].base_quantity, batchNumber, validatedFields.due_date]
+        );
+        const orderId = orderResult.rows[0].id;
+        console.log('Order inserted:', orderResult.rows[0]);
+
+        let stepNumber = 1;
+        let ingredientsDescription = 'Gather all required ingredients';
+        if (ingredientsResult.rows.length > 0) {
+            const ingredientList = ingredientsResult.rows.map(ing => {
+                const scaledQuantity = parseFloat(ing.quantity) * scalingFactor;
+                const ingredientName = ing.name || ing.sku;
+                return `${ingredientName} (${ing.sku}): ${scaledQuantity.toFixed(2)} ${ing.unit_type}`;
+            }).join(', ');
+            ingredientsDescription = `Gather all required ingredients: ${ingredientList}`;
+
+            for (const ingredient of ingredientsResult.rows) {
+                const requiredQuantity = ingredient.quantity * scalingFactor;
+                let requiredQuantityInInventoryUnits = convert(
+                    requiredQuantity,
+                    ingredient.unit_type,
+                    ingredient.inventory_unit_type
+                );
+                console.log(`Converted ${requiredQuantity} ${ingredient.unit_type} to ${requiredQuantityInInventoryUnits} ${ingredient.inventory_unit_type} for ${ingredient.sku}`);
+
+                if (requiredQuantityInInventoryUnits > ingredient.stock_level) {
+                    throw new Error(`Insufficient stock for ${ingredient.sku}: need ${requiredQuantityInInventoryUnits}, have ${ingredient.stock_level}`);
+                }
+
+                const batchesResult = await client.query(`
+                    SELECT ib.id, ib.batch_number, ib.stock_level, ib.created_at
+                    FROM InventoryBatches ib
+                    WHERE ib.inventory_item_id = $1 AND ib.stock_level > 0
+                    ORDER BY ib.created_at ASC`,
+                    [ingredient.item_id]
+                );
+
+                let remainingQuantity = requiredQuantityInInventoryUnits;
+
+                for (const batch of batchesResult.rows) {
+                    if (remainingQuantity <= 0) break;
+                    
+                    const quantityToUse = Math.min(batch.stock_level, remainingQuantity);
+                    
+                    await client.query(
+                        `INSERT INTO ProductionBatches 
+                        (production_order_id, item_id, quantity_used, batch_number, item_type) 
+                        VALUES ($1, $2, $3::numeric, $4, 'raw_ingredient')`,
+                        [orderId, ingredient.item_id, quantityToUse, batch.batch_number]
+                    );
+                    
+                    await client.query(
+                        `UPDATE InventoryBatches 
+                         SET stock_level = stock_level - $1 
+                         WHERE id = $2`,
+                        [quantityToUse, batch.id]
+                    );
+                    
+                    remainingQuantity -= quantityToUse;
+                }
+                
+                if (remainingQuantity > 0) {
+                    console.log(`Using ${remainingQuantity} units from main inventory for ${ingredient.sku}`);
+                    const fallbackBatch = await client.query(
+                        `SELECT batch_number FROM InventoryBatches 
+                         WHERE inventory_item_id = $1 AND stock_level > 0 
+                         ORDER BY created_at DESC LIMIT 1`,
+                        [ingredient.item_id]
+                    );
+                    const batchNumberToUse = fallbackBatch.rows.length > 0 ? fallbackBatch.rows[0].batch_number : 'UNASSIGNED';
+                    await client.query(
+                        `INSERT INTO ProductionBatches 
+                        (production_order_id, item_id, quantity_used, batch_number, item_type) 
+                        VALUES ($1, $2, $3::numeric, $4, 'raw_ingredient')`,
+                        [orderId, ingredient.item_id, remainingQuantity, batchNumberToUse]
+                    );
+                    
+                    await client.query(
+                        `UPDATE InventoryItems 
+                         SET stock_level = stock_level - $1::numeric 
+                         WHERE id = $2`,
+                        [remainingQuantity, ingredient.item_id]
+                    );
+                }
+            }
+        }
+
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber++, ingredientsDescription]
+        );
+
+        // Insert equipment into ProductionSteps
+        const equipmentResult = await client.query(
+            `SELECT equipment_name 
+             FROM MMREquipment 
+             WHERE mmr_product_sku = $1 AND mmr_version = $2`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+        let equipmentDescription = 'Prepare all required equipment';
+        if (equipmentResult.rows.length > 0) {
+            const equipmentList = equipmentResult.rows.map(eq => eq.equipment_name).join(', ');
+            equipmentDescription = `Prepare all required equipment: ${equipmentList}`;
+        }
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber++, equipmentDescription]
+        );
+
+        // Insert MMR steps
+        const stepsResult = await client.query(
+            'SELECT * FROM MMRSteps WHERE mmr_product_sku = $1 AND mmr_version = $2 ORDER BY step_number',
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+
+        for (const step of stepsResult.rows) {
+            await client.query(
+                `INSERT INTO ProductionSteps 
+                (production_order_id, step_number, description, quality_checks) 
+                VALUES ($1, $2, $3, '[]')`,
+                [orderId, stepNumber++, step.description]
+            );
+        }
+
+        // Insert packaging into ProductionBatches and ProductionSteps
+        const packagingResult = await client.query(`
+            SELECT mp.*, ii.id as item_id, ii.name as packaging_name, ii.unit_type, ii.sku 
+            FROM MMRPackaging mp
+            LEFT JOIN InventoryItems ii ON mp.packaging_sku = ii.sku
+            WHERE mp.mmr_product_sku = $1 AND mp.mmr_version = $2`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+
+        let packagingDescription = 'Package the finished product';
+        if (packagingResult.rows.length > 0) {
+            const packagingList = packagingResult.rows.map(pkg => {
+                const scaledQuantity = parseFloat(pkg.quantity) * scalingFactor;
+                const packageName = pkg.packaging_name || pkg.packaging_sku;
+                return `${packageName} (${pkg.packaging_sku}): ${scaledQuantity.toFixed(2)} ${pkg.unit_type}`;
+            }).join(', ');
+            packagingDescription = `Package the finished product: ${packagingList}`;
+
+            for (const pkg of packagingResult.rows) {
+                const scaledQuantity = parseFloat(pkg.quantity) * scalingFactor;
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, item_type) 
+                    VALUES ($1, $2, $3::numeric, 'packaging')`,
+                    [orderId, pkg.item_id, scaledQuantity]
+                );
+            }
+        }
+
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber++, packagingDescription]
+        );
+
+        // Insert labels into ProductionBatches and ProductionSteps
+        const labelsResult = await client.query(`
+            SELECT ml.*, ii.id as item_id, ii.name as label_name, ii.unit_type, ii.sku 
+            FROM MMRLabels ml
+            LEFT JOIN InventoryItems ii ON ml.label_sku = ii.sku
+            WHERE ml.mmr_product_sku = $1 AND ml.mmr_version = $2`,
+            [validatedFields.mmr_product_sku, validatedFields.mmr_version]
+        );
+
+        let labelingDescription = 'Apply labels to packaged product';
+        if (labelsResult.rows.length > 0) {
+            const labelList = labelsResult.rows.map(label => {
+                const scaledQuantity = parseFloat(label.quantity) * scalingFactor;
+                const labelName = label.label_name || label.label_sku;
+                return `${labelName} (${label.label_sku}): ${scaledQuantity.toFixed(2)} ${label.unit_type}`;
+            }).join(', ');
+            labelingDescription = `Apply labels to packaged product: ${labelList}`;
+
+            for (const lbl of labelsResult.rows) {
+                const scaledQuantity = parseFloat(lbl.quantity) * scalingFactor;
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, item_type) 
+                    VALUES ($1, $2, $3::numeric, 'label')`,
+                    [orderId, lbl.item_id, scaledQuantity]
+                );
+            }
+        }
+
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber, labelingDescription]
+        );
+
+        console.log(`Created ${stepNumber} production steps with MMR data`);
+        await client.query('COMMIT');
+        res.status(201).json({ 
+            id: orderId,
+            batch_number: batchNumber,
+            due_date: validatedFields.due_date,
+            message: 'Production order created successfully'
+        });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Transaction error:', err);
+        res.status(500).json({ error: 'Failed to create production order', details: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+async function getDailySequence(client, product_sku, version) {
+    const formattedDate = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const result = await client.query(
+        `SELECT COUNT(*) as count 
+         FROM ProductionOrders 
+         WHERE finished_batch_number LIKE $1`,
+        [`P${formattedDate}%`]
+    );
+    const count = parseInt(result.rows[0].count, 10);
+    if (count >= 9) throw new Error('Max 9 production orders per day exceeded');
+    return count + 1;
+}
+
+async function getDailySequence(client, product_sku, version) {
+    const formattedDate = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const result = await client.query(
+        `SELECT COUNT(*) as count 
+         FROM ProductionOrders 
+         WHERE finished_batch_number LIKE $1`,
+        [`P${formattedDate}%`]
+    );
+    const count = parseInt(result.rows[0].count, 10);
+    if (count >= 9) throw new Error('Max 9 production orders per day exceeded');
+    return count + 1;
+}
+
+app.get('/index.html', authenticateToken, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/mmr.html', authenticateToken, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'mmr.html'));
+});
+
+app.get('/production-process.html', authenticateToken, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'production-process.html'));
+});
+
+// Authentication endpoints
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { username, email, password, role } = req.body;
+        
+        // Only allow admin role to be set by existing admins
+        if (role === ROLES.ADMIN) {
+            return res.status(403).json({ error: 'Cannot create admin users through this endpoint' });
+        }
+
+        const user = await createUser(username, email, password, role);
+        res.status(201).json({ message: 'User created successfully', user });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const result = await loginUser(username, password);
+        res.json(result);
+    } catch (err) {
+        res.status(401).json({ error: err.message });
+    }
+});
+
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+    try {
+        const token = req.headers['authorization'].split(' ')[1];
+        await logoutUser(token);
+        res.json({ message: 'Logged out successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Protected routes with role-based access control
+app.post('/api/inventory', authenticateToken, checkPermission('create_inventory'), async (req, res) => {
+    const { sku, name, type, stock_level, unit_type, batch_number, supplier_id, minimum_quantity } = req.body;
+    try {
+        const result = await pgPool.query(
+            'INSERT INTO InventoryItems (sku, name, type, stock_level, unit_type, batch_number, supplier_id, minimum_quantity) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
+            [sku, name, type, stock_level, unit_type, batch_number, supplier_id, minimum_quantity]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/inventory', authenticateToken, checkPermission('view_inventory'), async (req, res) => {
+    try {
+        // First get all inventory items with their batches
+        const result = await pgPool.query(`
+            WITH grouped_items AS (
+                SELECT 
+                    ii.id,
+                    ii.sku,
+                    ii.name,
+                    ii.type,
+                    ii.unit_type,
+                    ii.location,
+                    ii.minimum_quantity,
+                    ii.sellable,
+                    MIN(ii.created_at) as first_created_at,
+                    MAX(ii.created_at) as last_updated_at,
+                    SUM(COALESCE(ib.stock_level, ii.stock_level)) as total_stock,
+                    json_agg(
+                        CASE WHEN ib.id IS NOT NULL THEN
+                            json_build_object(
+                                'id', ib.id,
+                                'batch_number', ib.batch_number,
+                                'stock_level', ib.stock_level,
+                                'created_at', ib.created_at,
+                                'updated_at', ib.updated_at
+                            )
+                        ELSE
+                            json_build_object(
+                                'id', NULL,
+                                'batch_number', NULL,
+                                'stock_level', ii.stock_level,
+                                'created_at', ii.created_at,
+                                'updated_at', ii.updated_at
+                            )
+                        END
+                        ORDER BY COALESCE(ib.created_at, ii.created_at) DESC
+                    ) as batches
+                FROM InventoryItems ii
+                LEFT JOIN InventoryBatches ib ON ii.id = ib.inventory_item_id
+                GROUP BY ii.id, ii.sku, ii.name, ii.type, ii.unit_type, ii.location, ii.minimum_quantity, ii.sellable
+            )
+            SELECT * FROM grouped_items ORDER BY last_updated_at DESC
+        `);
+        
+        const items = result.rows;
+        
+        // Get all receipts for all items with batches
+        const skusWithBatches = items
+            .filter(item => item.batches && item.batches.some(batch => batch.batch_number))
+            .map(item => item.sku);
+            
+        if (skusWithBatches.length > 0) {
+            // Fetch all receipts for these SKUs
+            const receiptsResult = await pgPool.query(`
+                SELECT * FROM InventoryReceipts 
+                WHERE sku = ANY($1)
+                ORDER BY created_at DESC
+            `, [skusWithBatches]);
+            
+            // Group receipts by SKU and batch number
+            const receiptsBySkuAndBatch = {};
+            receiptsResult.rows.forEach(receipt => {
+                if (!receipt.batch_number) return;
+                
+                if (!receiptsBySkuAndBatch[receipt.sku]) {
+                    receiptsBySkuAndBatch[receipt.sku] = {};
+                }
+                
+                const batchKey = receipt.batch_number.toLowerCase();
+                if (!receiptsBySkuAndBatch[receipt.sku][batchKey] || 
+                    new Date(receipt.created_at) > new Date(receiptsBySkuAndBatch[receipt.sku][batchKey].created_at)) {
+                    receiptsBySkuAndBatch[receipt.sku][batchKey] = receipt;
+                }
+            });
+            
+            // Enhance each item's batches with receipt data
+            items.forEach(item => {
+                if (item.batches && receiptsBySkuAndBatch[item.sku]) {
+                    item.batches = item.batches.map(batch => {
+                        if (!batch.batch_number) return batch;
+                        
+                        const batchKey = batch.batch_number.toLowerCase();
+                        const receipt = receiptsBySkuAndBatch[item.sku][batchKey];
+                        
+                        if (receipt) {
+                            return {
+                                ...batch,
+                                receipt_number: receipt.receipt_number,
+                                supplier: receipt.supplier,
+                                delivery_date: receipt.delivery_date,
+                                expiration_date: receipt.expiration_date,
+                                notes: receipt.notes
+                            };
+                        }
+                        
+                        return batch;
+                    });
+                }
+            });
+        }
+        
+        res.json(items);
+    } catch (err) {
+        console.error('Error fetching inventory items:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get inventory item by SKU with batches
+app.get('/api/inventory/:sku', async (req, res) => {
+    try {
+        // First query to get the inventory item and its batches
+        const inventoryResult = await pgPool.query(`
+            SELECT 
+                ii.*,
+                COALESCE(json_agg(
+                    CASE WHEN ib.id IS NOT NULL THEN
+                        json_build_object(
+                            'id', ib.id,
+                            'batch_number', ib.batch_number,
+                            'stock_level', ib.stock_level,
+                            'created_at', ib.created_at,
+                            'updated_at', ib.updated_at
+                        )
+                    ELSE NULL
+                    END
+                ) FILTER (WHERE ib.id IS NOT NULL), '[]'::json) as batches
+            FROM InventoryItems ii
+            LEFT JOIN InventoryBatches ib ON ii.id = ib.inventory_item_id
+            WHERE ii.sku = $1
+            GROUP BY ii.id
+        `, [req.params.sku]);
+        
+        if (inventoryResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        const item = inventoryResult.rows[0];
+        
+        // If there are batches, get receipt data for each batch
+        if (item.batches && item.batches.length > 0) {
+            // Get all receipts for this SKU
+            const receiptsResult = await pgPool.query(`
+                SELECT * FROM InventoryReceipts 
+                WHERE sku = $1
+                ORDER BY created_at DESC
+            `, [req.params.sku]);
+            
+            // Map receipts to batches by batch number (case insensitive)
+            const receiptsByBatch = {};
+            receiptsResult.rows.forEach(receipt => {
+                if (receipt.batch_number) {
+                    const batchKey = receipt.batch_number.toLowerCase();
+                    if (!receiptsByBatch[batchKey] || new Date(receipt.created_at) > new Date(receiptsByBatch[batchKey].created_at)) {
+                        receiptsByBatch[batchKey] = receipt;
+                    }
+                }
+            });
+            
+            // Enhance each batch with receipt data
+            item.batches = item.batches.map(batch => {
+                const batchKey = batch.batch_number.toLowerCase();
+                const receipt = receiptsByBatch[batchKey];
+                
+                if (receipt) {
+                    return {
+                        ...batch,
+                        receipt_number: receipt.receipt_number,
+                        supplier: receipt.supplier,
+                        delivery_date: receipt.delivery_date,
+                        expiration_date: receipt.expiration_date,
+                        notes: receipt.notes
+                    };
+                }
+                
+                return batch;
+            });
+        }
+        
+        res.json(item);
+    } catch (err) {
+        console.error('Error fetching inventory item:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get inventory items by batch number
+app.get('/api/inventory/batch/:batchNumber', async (req, res) => {
+    try {
+        const result = await pgPool.query('SELECT * FROM InventoryItems WHERE batch_number = $1', [req.params.batchNumber]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Update inventory item
+app.put('/api/inventory/:sku', async (req, res) => {
+    console.log('PUT /api/inventory/:sku - Request received:', {
+        sku: req.params.sku,
+        body: req.body
+    });
+    
+    const { name, type, stock_level, unit_type, batch_number, supplier_id, minimum_quantity } = req.body;
+    
+    try {
+        console.log('Executing SQL query with parameters:', {
+            name, 
+            type, 
+            stock_level, 
+            unit_type, 
+            batch_number, 
+            supplier_id, 
+            minimum_quantity,
+            sku: req.params.sku
+        });
+        
+        const result = await pgPool.query(
+            'UPDATE InventoryItems SET name = $1, type = $2, stock_level = $3, unit_type = $4, batch_number = $5, supplier_id = $6, minimum_quantity = $7 WHERE sku = $8 RETURNING *',
+            [name, type, stock_level, unit_type, batch_number, supplier_id, minimum_quantity, req.params.sku]
+        );
+        
+        if (result.rows.length === 0) {
+            console.log(`Item not found with SKU: ${req.params.sku}`);
+            return res.status(404).json({ error: 'Item not found' });
+        }
+        
+        console.log('Update successful:', result.rows[0]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Error updating inventory item:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Update stock level
+app.patch('/api/inventory/:sku/stock', async (req, res) => {
+    const { stock_level } = req.body;
+    try {
+        const result = await pgPool.query(
+            'UPDATE InventoryItems SET stock_level = $1 WHERE sku = $2 RETURNING *',
+            [stock_level, req.params.sku]
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get inventory items by type (raw ingredient or finished good)
+app.get('/api/inventory/type/:type', async (req, res) => {
+    try {
+        const result = await pgPool.query('SELECT * FROM InventoryItems WHERE type = $1', [req.params.type]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Debug route to check database inventory types
+app.get('/api/debug/inventory-types', async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT type, COUNT(*) as count 
+            FROM InventoryItems 
+            GROUP BY type
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Production Orders endpoints
+app.get('/api/v1/production-orders', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1; // Default to page 1
+        const limit = parseInt(req.query.limit) || 10; // Default to 10 items per page
+        const offset = (page - 1) * limit;
+
+        console.log(`Fetching production orders: page=${page}, limit=${limit}, offset=${offset}`);
+
+        // Get total count for pagination
+        const countResult = await pgPool.query(
+            `SELECT COUNT(*) as total FROM ProductionOrders`
+        );
+        const totalOrders = parseInt(countResult.rows[0].total);
+        const totalPages = Math.ceil(totalOrders / limit);
+
+        // Get paginated orders
+        const result = await pgPool.query(`
+            SELECT 
+                po.*,
+                ii.name as product_name,
+                COALESCE(json_agg(
+                    json_build_object(
+                       'item_id', pb.item_id,
+                       'batch_number', pb.batch_number,
+                       'quantity_used', pb.quantity_used
+                    )
+                ) FILTER (WHERE pb.id IS NOT NULL), '[]') as batches_used
+            FROM ProductionOrders po
+            LEFT JOIN InventoryItems ii ON po.product_sku = ii.sku
+            LEFT JOIN ProductionBatches pb ON po.id = pb.production_order_id
+            GROUP BY po.id, ii.name
+            ORDER BY po.id DESC
+            LIMIT $1 OFFSET $2
+        `, [limit, offset]);
+
+        console.log(`Retrieved ${result.rows.length} production orders for page ${page}`);
+
+        res.json({
+            orders: result.rows,
+            pagination: {
+                currentPage: page,
+                totalPages: totalPages,
+                totalOrders: totalOrders,
+                limit: limit
+            }
+        });
+    } catch (err) {
+        console.error('Error retrieving production orders:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/v1/production-orders', authenticateToken, checkPermission('create_production_order'), async (req, res) => {
+    console.log('POST /api/v1/production-orders endpoint called');
+    console.log('Request body:', req.body);
+    const { product_sku, quantity, mmr_product_sku, mmr_version, due_date } = req.body;
+    console.log('Extracted values:', { product_sku, quantity, mmr_product_sku, mmr_version, due_date });
+    const client = await pgPool.connect();
+
+    try {
+        console.log('Fetching MMR...');
+        const mmrResult = await client.query(
+            'SELECT * FROM MMRs WHERE product_sku = $1 AND version = $2 AND is_active = true',
+            [mmr_product_sku, mmr_version]
+        );
+
+        if (mmrResult.rows.length === 0) {
+            console.log('MMR not found');
+            return res.status(404).json({ error: 'Active MMR version not found' });
+        }
+
+        if (product_sku !== mmr_product_sku) {
+            console.log('SKU mismatch');
+            return res.status(400).json({ error: 'Product SKU does not match MMR product SKU' });
+        }
+
+        const scalingFactor = quantity / mmrResult.rows[0].base_quantity;
+        console.log(`Scaling factor: ${scalingFactor}`);
+
+        console.log('Fetching ingredients...');
+        const ingredientsResult = await client.query(`
+            SELECT mi.*, ii.id as item_id, ii.unit_type as inventory_unit_type, ii.stock_level, ii.sku
+            FROM MMRIngredients mi 
+            JOIN InventoryItems ii ON mi.ingredient_sku = ii.sku 
+            WHERE mi.mmr_product_sku = $1 AND mi.mmr_version = $2`,
+            [mmr_product_sku, mmr_version]
+        );
+        console.log(`Found ${ingredientsResult.rows.length} ingredients`);
+
+        for (const ingredient of ingredientsResult.rows) {
+            const requiredQuantity = ingredient.quantity * scalingFactor;
+            let requiredQuantityInInventoryUnits;
+
+            try {
+                console.log(`Converting units for ${ingredient.sku}: ${requiredQuantity} ${ingredient.unit_type} to ${ingredient.inventory_unit_type}`);
+                requiredQuantityInInventoryUnits = convert(
+                    requiredQuantity,
+                    ingredient.unit_type,
+                    ingredient.inventory_unit_type
+                );
+                console.log(`Converted: ${requiredQuantityInInventoryUnits} ${ingredient.inventory_unit_type}`);
+            } catch (error) {
+                console.error(`Unit conversion error for ${ingredient.sku}:`, error);
+                return res.status(400).json({
+                    error: `Unit conversion error for ingredient ${ingredient.sku}: ${error.message}`
+                });
+            }
+
+            console.log(`Checking stock for ${ingredient.sku}: need ${requiredQuantityInInventoryUnits}, have ${ingredient.stock_level}`);
+            if (requiredQuantityInInventoryUnits > ingredient.stock_level) {
+                return res.status(400).json({
+                    error: `Insufficient stock for ingredient ${ingredient.sku}. ` +
+                          `Need ${requiredQuantityInInventoryUnits} ${ingredient.inventory_unit_type}, ` +
+                          `but only have ${ingredient.stock_level} ${ingredient.inventory_unit_type}`
+                });
+            }
+        }
+
+        // Generate a shorter batch number
+        const today = new Date();
+        const year = today.getFullYear().toString().slice(-2);
+        const month = (today.getMonth() + 1).toString().padStart(2, '0');
+        const day = today.getDate().toString().padStart(2, '0');
+        const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
+        const batchNumber = `P${year}${month}${day}${random}`;
+
+        console.log(`Generated batch number: ${batchNumber}`);
+
+        console.log('Starting transaction...');
+        await client.query('BEGIN');
+
+        console.log('Inserting into ProductionOrders...');
+        const orderResult = await client.query(
+            `INSERT INTO ProductionOrders 
+            (product_sku, quantity, status, mmr_product_sku, mmr_version, mmr_base_quantity, finished_batch_number, due_date) 
+            VALUES ($1, $2, 'Pending', $3, $4, $5, $6, $7) 
+            RETURNING id`,
+            [product_sku, quantity, mmr_product_sku, mmr_version, mmrResult.rows[0].base_quantity, batchNumber, due_date]
+        );
+        
+        const orderId = orderResult.rows[0].id;
+        console.log(`Order created with ID: ${orderId}`);
+
+        // Insert ingredients into ProductionBatches
+        console.log('Inserting ingredients into ProductionBatches...');
+        for (const ingredient of ingredientsResult.rows) {
+            const requiredQuantity = ingredient.quantity * scalingFactor;
+            const requiredQuantityInInventoryUnits = convert(
+                requiredQuantity,
+                ingredient.unit_type,
+                ingredient.inventory_unit_type
+            );
+
+            const batchesResult = await client.query(
+                `SELECT ib.id, ib.batch_number, ib.stock_level, ib.created_at,
+                       ib.inventory_item_id, ir.supplier, ir.delivery_date, ir.expiration_date
+                FROM InventoryBatches ib
+                LEFT JOIN InventoryReceipts ir ON ib.batch_number = ir.batch_number
+                WHERE ib.inventory_item_id = $1 AND ib.stock_level > 0
+                ORDER BY ib.created_at ASC`,
+                [ingredient.item_id]
+            );
+            console.log(`Found ${batchesResult.rows.length} batches for ${ingredient.sku}`);
+
+            let remainingQuantity = requiredQuantityInInventoryUnits;
+
+            for (const batch of batchesResult.rows) {
+                if (remainingQuantity <= 0) break;
+                
+                const quantityToUse = Math.min(batch.stock_level, remainingQuantity);
+                console.log(`Inserting batch ${batch.batch_number} for ${ingredient.sku}: ${quantityToUse} ${ingredient.inventory_unit_type}`);
+                
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, batch_number, item_type, 
+                     original_unit, inventory_unit, conversion_factor) 
+                    VALUES ($1, $2, $3, $4, 'raw_ingredient', $5, $6, $7)`,
+                    [
+                        orderId,
+                        ingredient.item_id,
+                        quantityToUse,
+                        batch.batch_number,
+                        ingredient.unit_type,
+                        ingredient.inventory_unit_type,
+                        requiredQuantityInInventoryUnits / requiredQuantity
+                    ]
+                );
+                
+                await client.query(
+                    `UPDATE InventoryBatches 
+                     SET stock_level = stock_level - $1 
+                     WHERE id = $2`,
+                    [quantityToUse, batch.id]
+                );
+                
+                remainingQuantity -= quantityToUse;
+            }
+            
+            if (remainingQuantity > 0) {
+                console.log(`Inserting remaining ${remainingQuantity} units from main inventory for ${ingredient.sku}`);
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, item_type, 
+                     original_unit, inventory_unit, conversion_factor) 
+                    VALUES ($1, $2, $3, 'raw_ingredient', $4, $5, $6)`,
+                    [
+                        orderId,
+                        ingredient.item_id,
+                        remainingQuantity,
+                        ingredient.unit_type,
+                        ingredient.inventory_unit_type,
+                        requiredQuantityInInventoryUnits / requiredQuantity
+                    ]
+                );
+                
+                await client.query(
+                    `UPDATE InventoryItems 
+                     SET stock_level = stock_level - $1 
+                     WHERE id = $2`,
+                    [remainingQuantity, ingredient.item_id]
+                );
+            }
+        }
+
+        // Insert MMR steps
+        console.log('Inserting MMR steps...');
+        const stepsResult = await client.query(
+            'SELECT * FROM MMRSteps WHERE mmr_product_sku = $1 AND mmr_version = $2 ORDER BY step_number',
+            [mmr_product_sku, mmr_version]
+        );
+
+        let stepNumber = 1;
+        for (const step of stepsResult.rows) {
+            await client.query(
+                `INSERT INTO ProductionSteps 
+                (production_order_id, step_number, description, quality_checks) 
+                VALUES ($1, $2, $3, $4)`,
+                [orderId, stepNumber++, step.description, '[]']
+            );
+        }
+
+        // Insert packaging into ProductionBatches
+        console.log('Inserting packaging into ProductionBatches...');
+        const packagingResult = await client.query(`
+            SELECT mp.*, ii.id as item_id, ii.name as packaging_name, ii.unit_type, ii.sku 
+            FROM MMRPackaging mp
+            LEFT JOIN InventoryItems ii ON mp.packaging_sku = ii.sku
+            WHERE mp.mmr_product_sku = $1 AND mp.mmr_version = $2`,
+            [mmr_product_sku, mmr_version]
+        );
+
+        let packagingDescription = 'Package the finished product';
+        if (packagingResult.rows.length > 0) {
+            const packagingList = packagingResult.rows.map(pkg => {
+                const scaledQuantity = parseFloat(pkg.quantity) * scalingFactor;
+                const packageName = pkg.packaging_name || pkg.packaging_sku;
+                return `${packageName} (${pkg.packaging_sku}): ${scaledQuantity.toFixed(2)} ${pkg.unit_type}`;
+            }).join(', ');
+            packagingDescription = `Package the finished product: ${packagingList}`;
+
+            for (const pkg of packagingResult.rows) {
+                const scaledQuantity = parseFloat(pkg.quantity) * scalingFactor;
+                console.log(`Inserting packaging ${pkg.sku}: ${scaledQuantity} ${pkg.unit_type}`);
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, item_type, inventory_unit) 
+                    VALUES ($1, $2, $3, 'packaging', $4)`,
+                    [orderId, pkg.item_id, scaledQuantity, pkg.unit_type]
+                );
+            }
+        }
+
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber++, packagingDescription]
+        );
+
+        // Insert labels into ProductionBatches
+        console.log('Inserting labels into ProductionBatches...');
+        const labelsResult = await client.query(`
+            SELECT ml.*, ii.id as item_id, ii.name as label_name, ii.unit_type, ii.sku 
+            FROM MMRLabels ml
+            LEFT JOIN InventoryItems ii ON ml.label_sku = ii.sku
+            WHERE ml.mmr_product_sku = $1 AND ml.mmr_version = $2`,
+            [mmr_product_sku, mmr_version]
+        );
+
+        let labelingDescription = 'Apply labels to packaged product';
+        if (labelsResult.rows.length > 0) {
+            const labelList = labelsResult.rows.map(label => {
+                const scaledQuantity = parseFloat(label.quantity) * scalingFactor;
+                const labelName = label.label_name || label.label_sku;
+                return `${labelName} (${label.label_sku}): ${scaledQuantity.toFixed(2)} ${label.unit_type}`;
+            }).join(', ');
+            labelingDescription = `Apply labels to packaged product: ${labelList}`;
+
+            for (const lbl of labelsResult.rows) {
+                const scaledQuantity = parseFloat(lbl.quantity) * scalingFactor;
+                console.log(`Inserting label ${lbl.sku}: ${scaledQuantity} ${lbl.unit_type}`);
+                await client.query(
+                    `INSERT INTO ProductionBatches 
+                    (production_order_id, item_id, quantity_used, item_type, inventory_unit) 
+                    VALUES ($1, $2, $3, 'label', $4)`,
+                    [orderId, lbl.item_id, scaledQuantity, lbl.unit_type]
+                );
+            }
+        }
+
+        await client.query(
+            `INSERT INTO ProductionSteps 
+            (production_order_id, step_number, description, quality_checks) 
+            VALUES ($1, $2, $3, '[]')`,
+            [orderId, stepNumber, labelingDescription]
+        );
+
+        console.log(`Created ${stepNumber} production steps with MMR data`);
+
+        await client.query('COMMIT');
+        console.log('Transaction committed successfully');
+
+        res.status(201).json({ 
+            id: orderId,
+            batch_number: batchNumber,
+            due_date: due_date,
+            message: 'Production order created successfully'
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Transaction error:', error);
+        res.status(500).json({ error: 'Failed to create production order', details: error.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Get production order by ID with batch details
+app.get('/api/v1/production-orders/:id', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    try {
+        console.log(`Getting production order with ID: ${req.params.id}`);
+        
+        // First check if the order exists
+        const orderCheck = await pgPool.query(
+            'SELECT id, product_sku, mmr_product_sku, mmr_version FROM ProductionOrders WHERE id = $1',
+            [req.params.id]
+        );
+        
+        if (orderCheck.rows.length === 0) {
+            console.log(`Production order ${req.params.id} not found`);
+            return res.status(404).json({ error: 'Production order not found' });
+        }
+        
+        console.log(`Found order: ${JSON.stringify(orderCheck.rows[0])}`);
+        
+        // Check if the MMR data exists
+        if (orderCheck.rows[0].mmr_product_sku) {
+            const mmrCheck = await pgPool.query(
+                'SELECT product_sku, version FROM MMRs WHERE product_sku = $1 AND version = $2',
+                [orderCheck.rows[0].mmr_product_sku, orderCheck.rows[0].mmr_version]
+            );
+            
+            if (mmrCheck.rows.length === 0) {
+                console.log(`MMR with SKU ${orderCheck.rows[0].mmr_product_sku} and version ${orderCheck.rows[0].mmr_version} not found`);
+            } else {
+                console.log(`Found MMR: ${JSON.stringify(mmrCheck.rows[0])}`);
+            }
+        }
+        
+        // Now proceed with the main query
+        const result = await pgPool.query(`
+            SELECT po.*, 
+                   p.name as product_name,
+                   COALESCE(json_agg(json_build_object(
+                       'item_id', pb.item_id,
+                       'batch_number', pb.batch_number,
+                       'quantity_used', pb.quantity_used,
+                       'item_name', ii.name,
+                       'item_sku', ii.sku
+                   )) FILTER (WHERE pb.item_id IS NOT NULL), '[]') as batches_used
+            FROM ProductionOrders po
+            LEFT JOIN ProductionBatches pb ON po.id = pb.production_order_id
+            LEFT JOIN InventoryItems ii ON pb.item_id = ii.id
+            LEFT JOIN MMRs m ON po.mmr_product_sku = m.product_sku AND po.mmr_version = m.version
+            LEFT JOIN InventoryItems p ON po.product_sku = p.sku
+            WHERE po.id = $1
+            GROUP BY po.id, p.name
+        `, [req.params.id]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Production order not found after join' });
+        }
+        
+        console.log(`Successfully retrieved order ${req.params.id} with all data`);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(`Error retrieving production order ${req.params.id}:`, err);
+        res.status(500).json({ 
+            error: `Failed to retrieve production order: ${err.message}`,
+            details: err.stack
+        });
+    }
+});
+
+// Update production order status
+app.patch('/api/v1/production-orders/:id/status', authenticateToken, checkPermission('create_production_order'), async (req, res) => {
+    try {
+        const status = req.body.status;
+        const result = await pgPool.query(
+            'UPDATE ProductionOrders SET status = $1 WHERE id = $2 RETURNING *',
+            [status, req.params.id]
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Production order not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get production orders by status (move this BEFORE the :id route)
+app.get('/api/v1/production-orders/status/:status', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    try {
+        const status = req.params.status;
+        const result = await pgPool.query(`
+            SELECT po.*, 
+                   json_agg(json_build_object(
+                       'item_id', pb.item_id,
+                       'batch_number', pb.batch_number,
+                       'quantity_used', pb.quantity_used
+                   )) as batches_used
+            FROM ProductionOrders po
+            LEFT JOIN ProductionBatches pb ON po.id = pb.production_order_id
+            WHERE po.status = $1
+            GROUP BY po.id
+            ORDER BY po.id DESC
+        `, [status]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/v1/production-orders/:id/steps', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    try {
+        const orderResult = await pgPool.query(
+            `SELECT po.*, m.base_quantity 
+             FROM ProductionOrders po
+             LEFT JOIN MMRs m ON po.mmr_product_sku = m.product_sku AND po.mmr_version = m.version
+             WHERE po.id = $1`,
+            [req.params.id]
+        );
+        
+        if (orderResult.rows.length === 0) return res.status(404).json({ error: 'Production order not found' });
+
+        const order = orderResult.rows[0];
+        const scalingFactor = order.quantity / (order.base_quantity || 100);
+
+        const stepsResult = await pgPool.query(
+            `SELECT * FROM ProductionSteps WHERE production_order_id = $1 ORDER BY step_number`,
+            [req.params.id]
+        );
+
+        const steps = stepsResult.rows;
+
+        const batchesResult = await pgPool.query(
+            `SELECT pb.*, ii.name, ii.unit_type, ii.sku as item_sku
+             FROM ProductionBatches pb
+             LEFT JOIN InventoryItems ii ON pb.item_id = ii.id
+             WHERE pb.production_order_id = $1`,
+            [req.params.id]
+        );
+
+        const ingredients = batchesResult.rows.filter(b => b.item_type === 'raw_ingredient');
+        const packaging = batchesResult.rows.filter(b => b.item_type === 'packaging');
+        const labels = batchesResult.rows.filter(b => b.item_type === 'label');
+
+        const equipmentResult = await pgPool.query(
+            `SELECT equipment_name 
+             FROM MMREquipment 
+             WHERE mmr_product_sku = $1 AND mmr_version = $2`,
+            [order.mmr_product_sku, order.mmr_version]
+        );
+        const equipment = equipmentResult.rows.map(row => ({ name: row.equipment_name }));
+
+        const ingredientStepNumber = 1;
+        const equipmentStepNumber = 2;
+        const productionStep1Number = 3;
+        const productionStep2Number = 4;
+        const packagingStepNumber = 5;
+        const labelingStepNumber = 6;
+
+        for (let step of steps) {
+            if (step.step_number === ingredientStepNumber) {
+                step.ingredients = ingredients.map(ing => ({
+                    name: ing.name || ing.item_sku,
+                    sku: ing.item_sku,
+                    quantity: ing.quantity_used,
+                    unit_type: ing.unit_type,
+                    batch_number: ing.batch_number
+                }));
+            } else if (step.step_number === equipmentStepNumber) {
+                step.equipment = equipment;
+            } else if (step.step_number === packagingStepNumber) {
+                step.packaging = packaging.map(pkg => ({
+                    name: pkg.name || pkg.item_sku,
+                    sku: pkg.item_sku,
+                    quantity: pkg.quantity_used,
+                    unit_type: pkg.unit_type
+                }));
+            } else if (step.step_number === labelingStepNumber) {
+                step.labels = labels.map(lbl => ({
+                    name: lbl.name || lbl.item_sku,
+                    sku: lbl.item_sku,
+                    quantity: lbl.quantity_used,
+                    unit_type: lbl.unit_type
+                }));
+            } else if (step.step_number === productionStep1Number || step.step_number === productionStep2Number) {
+                let mmrStepNumber = step.step_number - 2; // Shift for ingredients and equipment
+                const subSteps = await pgPool.query(
+                    `SELECT * FROM MMRSubSteps 
+                     WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+                     ORDER BY sub_step_number`,
+                    [order.mmr_product_sku, order.mmr_version, mmrStepNumber]
+                );
+                step.subSteps = subSteps.rows.map(sub => ({
+                    sub_step_number: sub.sub_step_number,
+                    description: sub.description,
+                    step_type: sub.step_type
+                }));
+                // Add logging to verify sub-step data
+                console.log(`Step ${step.step_number} subSteps for order ${req.params.id}:`, step.subSteps.map(sub => ({
+                    sub_step_number: sub.sub_step_number,
+                    description: sub.description,
+                    step_type: sub.step_type
+                })));
+            }
+        }
+
+        res.json(steps);
+    } catch (err) {
+        console.error('Error fetching steps:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/v1/production-orders/:orderId/steps/:stepId', authenticateToken, checkPermission('create_production_order'), async (req, res) => {
+    const { orderId, stepId } = req.params;
+    const { completed, completed_by, completed_date } = req.body;
+
+    console.log(`Received PATCH request for order ${orderId}, step ${stepId}`, { completed, completed_by, completed_date });
+
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const result = await client.query(`
+            UPDATE ProductionSteps 
+            SET completed = $1, completed_by = $2, completed_at = $3
+            WHERE id = $4 AND production_order_id = $5
+            RETURNING *
+        `, [completed, completed_by, completed_date, stepId, orderId]);
+
+        console.log(`Query result for step ${stepId}:`, result.rows);
+
+        if (result.rows.length === 0) {
+            await client.query('ROLLBACK');
+            console.log(`Step ${stepId} not found for order ${orderId}`);
+            return res.status(404).json({ error: 'Step not found' });
+        }
+
+        const stepsResult = await client.query(`
+            SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE completed = true) as completed 
+            FROM ProductionSteps WHERE production_order_id = $1
+        `, [orderId]);
+
+        console.log(`Steps status for order ${orderId}:`, stepsResult.rows[0]);
+
+        const allStepsCompleted = stepsResult.rows[0].total === stepsResult.rows[0].completed;
+
+        await client.query(
+            `UPDATE ProductionOrders SET status = 'In Progress' WHERE id = $1 AND status = 'Pending'`,
+            [orderId]
+        );
+
+        await client.query('COMMIT');
+        res.json({ step: result.rows[0], allStepsCompleted });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Error completing step:', err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/v1/production-orders/:id/complete', authenticateToken, checkPermission('create_production_order'), async (req, res) => {
+    const { id } = req.params;
+    const { actual_yield, completed_by } = req.body;
+
+    console.log(`Completing order ${id} with actual_yield: ${actual_yield}, completed_by: ${completed_by}`);
+
+    if (!actual_yield || !completed_by) {
+        return res.status(400).json({ error: 'Actual yield and completed by fields are required' });
+    }
+
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const stepsCheck = await client.query(
+            `SELECT COUNT(*) as incomplete FROM ProductionSteps 
+             WHERE production_order_id = $1 AND completed = false`,
+            [id]
+        );
+        console.log(`Steps check: ${stepsCheck.rows[0].incomplete} incomplete steps`);
+        if (parseInt(stepsCheck.rows[0].incomplete) > 0) {
+            throw new Error('Cannot complete order: not all steps are completed');
+        }
+
+        const orderResult = await client.query(`SELECT * FROM ProductionOrders WHERE id = $1`, [id]);
+        console.log('Order data:', orderResult.rows[0]);
+        if (orderResult.rows.length === 0) throw new Error('Order not found');
+        const order = orderResult.rows[0];
+
+        const updateResult = await client.query(`
+            UPDATE ProductionOrders 
+            SET status = 'Completed', actual_yield = $1, completed_by = $2, completed_at = NOW()
+            WHERE id = $3
+            RETURNING *
+        `, [actual_yield, completed_by, id]);
+        console.log('Order update result:', updateResult.rows[0]);
+
+        const existingItem = await client.query(
+            `SELECT id, stock_level FROM InventoryItems 
+             WHERE sku = $1`,
+            [order.product_sku]
+        );
+        console.log('Existing inventory item:', existingItem.rows);
+
+        let inventoryItemId;
+        if (existingItem.rows.length > 0) {
+            inventoryItemId = existingItem.rows[0].id;
+            await client.query(
+                `UPDATE InventoryItems 
+                 SET stock_level = stock_level + $1, updated_at = NOW()
+                 WHERE id = $2`,
+                [actual_yield, inventoryItemId]
+            );
+            console.log(`Updated stock_level for ${order.product_sku} by ${actual_yield}`);
+        } else {
+            const newItemResult = await client.query(
+                `INSERT INTO InventoryItems (sku, name, type, stock_level, unit_type, batch_number)
+                 VALUES ($1, $2, 'finished good', $3, 'units', $4)
+                 RETURNING id`,
+                [order.product_sku, order.product_name || `Product ${order.product_sku}`, actual_yield, order.finished_batch_number]
+            );
+            inventoryItemId = newItemResult.rows[0].id;
+            console.log(`Inserted new finished good: ${order.product_sku}, ID: ${inventoryItemId}`);
+        }
+
+        await client.query(
+            `INSERT INTO InventoryBatches (inventory_item_id, batch_number, stock_level)
+             VALUES ($1, $2, $3)`,
+            [inventoryItemId, order.finished_batch_number, actual_yield]
+        );
+        console.log(`Inserted batch ${order.finished_batch_number} for ${order.product_sku} with stock_level ${actual_yield}`);
+
+        const scalingFactor = order.quantity / (order.mmr_base_quantity || 100);
+
+        // Deduct packaging from InventoryItems
+        const packagingResult = await client.query(
+            `SELECT pb.*, ii.sku 
+             FROM ProductionBatches pb
+             LEFT JOIN InventoryItems ii ON pb.item_id = ii.id
+             WHERE pb.production_order_id = $1 AND pb.item_type = 'packaging'`,
+            [id]
+        );
+        console.log('Packaging items:', packagingResult.rows);
+        for (const pkg of packagingResult.rows) {
+            const inventoryCheck = await client.query(
+                `SELECT stock_level FROM InventoryItems WHERE sku = $1`,
+                [pkg.sku]
+            );
+            console.log(`Checking packaging ${pkg.sku}: stock=${inventoryCheck.rows[0]?.stock_level}, needed=${pkg.quantity_used}`);
+            if (!inventoryCheck.rows[0] || inventoryCheck.rows[0].stock_level < pkg.quantity_used) {
+                throw new Error(`Insufficient stock for packaging ${pkg.sku}: need ${pkg.quantity_used}, have ${inventoryCheck.rows[0]?.stock_level || 0}`);
+            }
+            const quantityToDeduct = Math.floor(parseFloat(pkg.quantity_used)); // Convert to integer
+            await client.query(
+                `UPDATE InventoryItems 
+                 SET stock_level = stock_level - $1, updated_at = NOW()
+                 WHERE sku = $2`,
+                [quantityToDeduct, pkg.sku]
+            );
+            console.log(`Deducted ${quantityToDeduct} from ${pkg.sku}`);
+        }
+
+        // Deduct labels from InventoryItems
+        const labelsResult = await client.query(
+            `SELECT pb.*, ii.sku 
+             FROM ProductionBatches pb
+             LEFT JOIN InventoryItems ii ON pb.item_id = ii.id
+             WHERE pb.production_order_id = $1 AND pb.item_type = 'label'`,
+            [id]
+        );
+        console.log('Labels:', labelsResult.rows);
+        for (const lbl of labelsResult.rows) {
+            const inventoryCheck = await client.query(
+                `SELECT stock_level FROM InventoryItems WHERE sku = $1`,
+                [lbl.sku]
+            );
+            console.log(`Checking label ${lbl.sku}: stock=${inventoryCheck.rows[0]?.stock_level}, needed=${lbl.quantity_used}`);
+            if (!inventoryCheck.rows[0] || inventoryCheck.rows[0].stock_level < lbl.quantity_used) {
+                throw new Error(`Insufficient stock for label ${lbl.sku}: need ${lbl.quantity_used}, have ${inventoryCheck.rows[0]?.stock_level || 0}`);
+            }
+            const quantityToDeduct = Math.floor(parseFloat(lbl.quantity_used)); // Convert to integer
+            await client.query(
+                `UPDATE InventoryItems 
+                 SET stock_level = stock_level - $1, updated_at = NOW()
+                 WHERE sku = $2`,
+                [quantityToDeduct, lbl.sku]
+            );
+            console.log(`Deducted ${quantityToDeduct} from ${lbl.sku}`);
+        }
+
+        await client.query('COMMIT');
+        console.log(`Order ${id} completed successfully`);
+        res.json(updateResult.rows[0]);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Error completing order:', err);
+        res.status(500).json({ error: err.message, details: err.stack });
+    } finally {
+        client.release();
+    }
+});
+
+// Get production report
+app.get('/api/v1/production-orders/:id/report', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    const { id } = req.params;
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Order Details
+        const orderResult = await client.query(
+            `SELECT po.*, ii.name as product_name 
+             FROM ProductionOrders po
+             LEFT JOIN InventoryItems ii ON po.product_sku = ii.sku
+             WHERE po.id = $1 AND po.status = 'Completed'`,
+            [id]
+        );
+        if (orderResult.rows.length === 0) {
+            throw new Error('Completed order not found');
+        }
+        const order = orderResult.rows[0];
+        console.log('Order created_at:', order.created_at); // Debug log
+
+        // Batches Used (Ingredients, Packaging, Labels)
+        const batchesResult = await client.query(
+            `SELECT pb.*, ii.name, ii.unit_type, ii.sku as item_sku, ii.supplier_id
+             FROM ProductionBatches pb
+             LEFT JOIN InventoryItems ii ON pb.item_id = ii.id
+             WHERE pb.production_order_id = $1`,
+            [id]
+        );
+
+        const batches = await Promise.all(batchesResult.rows.map(async batch => {
+            let supplierName = 'N/A';
+            if (batch.supplier_id) {
+                const supplierResult = await client.query(
+                    `SELECT name FROM Suppliers WHERE id = $1`,
+                    [batch.supplier_id]
+                );
+                supplierName = supplierResult.rows[0]?.name || 'Unknown';
+            }
+            return {
+                item_type: batch.item_type,
+                name: batch.name || batch.item_sku,
+                sku: batch.item_sku,
+                quantity_used: batch.quantity_used,
+                batch_number: batch.batch_number || 'N/A',
+                supplier_name: supplierName,
+                unit_type: batch.unit_type || 'units'
+            };
+        }));
+
+        // Production Steps (including sub-steps)
+        const stepsResult = await client.query(
+            `SELECT ps.*, po.mmr_product_sku, po.mmr_version
+             FROM ProductionSteps ps
+             JOIN ProductionOrders po ON ps.production_order_id = po.id
+             WHERE ps.production_order_id = $1
+             ORDER BY ps.step_number`,
+            [id]
+        );
+
+        const steps = await Promise.all(stepsResult.rows.map(async step => {
+            let subSteps = [];
+            if (step.step_number === 3 || step.step_number === 4) {
+                const mmrStepNumber = step.step_number - 2;
+                const subStepsResult = await client.query(
+                    `SELECT * FROM MMRSubSteps 
+                     WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+                     ORDER BY sub_step_number`,
+                    [step.mmr_product_sku, step.mmr_version, mmrStepNumber]
+                );
+                subSteps = subStepsResult.rows.map(sub => ({
+                    sub_step_number: sub.sub_step_number || 'N/A',
+                    description: sub.description,
+                    step_type: sub.step_type,
+                    completed: step.completed,
+                    completed_by: step.completed_by,
+                    completed_at: step.completed_at,
+                    quality_checks: step.quality_checks || '[]'
+                }));
+            }
+            return {
+                step_number: step.step_number,
+                description: step.description,
+                completed: step.completed,
+                completed_by: step.completed_by || 'N/A',
+                completed_at: step.completed_at || null,
+                quality_checks: step.quality_checks || '[]',
+                sub_steps: subSteps
+            };
+        }));
+
+        // Equipment (from step 2 description or MMREquipment)
+        const equipmentStep = steps.find(step => step.step_number === 2);
+        const equipmentList = equipmentStep ? equipmentStep.description.replace('Prepare all required equipment: ', '').split(', ') : [];
+
+        // Yield Data
+        const totalGoodUnits = order.actual_yield || 0;
+        const rejectedUnits = order.quantity - totalGoodUnits;
+        const yieldPercentage = order.quantity > 0 ? ((totalGoodUnits / order.quantity) * 100).toFixed(2) : 0;
+
+        const report = {
+            order_details: {
+                id: order.id,
+                batch_number: order.finished_batch_number,
+                product_name: order.product_name || order.product_sku,
+                product_sku: order.product_sku,
+                quantity: order.quantity,
+                production_date: order.created_at || 'N/A', // Fallback if created_at is null
+                completion_date: order.completed_at || 'N/A'
+            },
+            batches_used: batches,
+            production_details: {
+                quantity_produced: totalGoodUnits,
+                equipment_used: equipmentList,
+                steps: steps
+            },
+            yield_data: {
+                total_good_units: totalGoodUnits,
+                rejected_units: rejectedUnits,
+                yield_percentage: yieldPercentage
+            }
+        };
+
+        await client.query('COMMIT');
+        res.json(report);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Error generating report:', err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Save BPR PDF to database
+app.post('/api/v1/production-orders/:id/save-report', authenticateToken, checkPermission('view_production_order'), async (req, res) => {
+    const { id } = req.params;
+    const { report_data } = req.body;
+    
+    console.log('Saving BPR report for production order:', id);
+    
+    try {
+        const result = await pgPool.query(
+            'INSERT INTO ProductionReports (production_order_id, report_data, created_by) VALUES ($1, $2, $3) RETURNING id',
+            [id, JSON.stringify(report_data), req.user.username]
+        );
+        
+        console.log('BPR report saved successfully, report ID:', result.rows[0].id);
+        res.status(201).json({ 
+            message: 'Report saved successfully', 
+            report_id: result.rows[0].id 
+        });
+    } catch (error) {
+        console.error('Error saving BPR report:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// MMR endpoints
+app.get('/api/mmr', authenticateToken, async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT m.*, 
+                   COUNT(DISTINCT mi.ingredient_sku) as ingredient_count,
+                   COUNT(DISTINCT ms.step_number) as step_count
+            FROM MMRs m
+            LEFT JOIN MMRIngredients mi ON m.product_sku = mi.mmr_product_sku AND m.version = mi.mmr_version
+            LEFT JOIN MMRSteps ms ON m.product_sku = ms.mmr_product_sku AND m.version = ms.mmr_version
+            WHERE m.is_active = true
+            GROUP BY m.product_sku, m.version, m.base_quantity, m.created_by, m.created_at, m.updated_at
+            ORDER BY m.product_sku, m.version DESC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching MMRs:', err);
+        res.status(500).json({ error: 'Failed to fetch MMRs' });
+    }
+});
+
+app.post('/api/mmr', authenticateToken, checkPermission('create_mmr'), async (req, res) => {
+    const client = await pgPool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const { 
+            product_sku, 
+            base_quantity,
+            ingredients,
+            equipment,
+            steps,
+            packaging,
+            labels,
+            created_by 
+        } = req.body;
+
+        console.log('Received MMR creation request:', { 
+            product_sku, 
+            base_quantity,
+            ingredients_count: ingredients?.length || 0,
+            equipment_count: equipment?.length || 0,
+            steps_count: steps?.length || 0,
+            packaging_count: packaging?.length || 0,
+            labels_count: labels?.length || 0,
+            created_by
+        });
+
+        // Get the latest version number for this product
+        const versionResult = await client.query(
+            'SELECT COALESCE(MAX(version), 0) + 1 as next_version FROM MMRs WHERE product_sku = $1',
+            [product_sku]
+        );
+        const version = versionResult.rows[0].next_version;
+
+        // Insert MMR - do not store the JSON arrays in the MMR table anymore
+        const mmrResult = await client.query(
+            'INSERT INTO MMRs (product_sku, version, base_quantity, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
+            [product_sku, version, base_quantity, created_by]
+        );
+        console.log(`Created new MMR for ${product_sku} v${version}`);
+
+        // Insert ingredients
+        if (ingredients && ingredients.length > 0) {
+            const ingredientParams = [];
+            const ingredientPlaceholders = [];
+            let paramIndex = 1;
+            
+            ingredients.forEach(ing => {
+                ingredientPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4})`);
+                ingredientParams.push(product_sku, version, ing.sku, ing.quantity, ing.unit);
+                paramIndex += 5;
+            });
+            
+            await client.query(`
+                INSERT INTO MMRIngredients (mmr_product_sku, mmr_version, ingredient_sku, quantity, unit_type)
+                VALUES ${ingredientPlaceholders.join(',')}
+            `, ingredientParams);
+            
+            console.log(`Added ${ingredients.length} ingredients to MMR ${product_sku} v${version}`);
+        }
+
+        // Insert steps with complex structure
+        if (steps && steps.length > 0) {
+            // Insert main steps
+            const mainStepParams = [];
+            const mainStepPlaceholders = [];
+            let paramIndex = 1;
+            
+            steps.forEach(step => {
+                mainStepPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4})`);
+                mainStepParams.push(product_sku, version, step.number, step.title, 'main');
+                paramIndex += 5;
+            });
+            
+            // Insert main steps
+            await client.query(`
+                INSERT INTO MMRSteps (mmr_product_sku, mmr_version, step_number, description, step_type)
+                VALUES ${mainStepPlaceholders.join(',')}
+            `, mainStepParams);
+            console.log(`Added ${steps.length} main steps to MMR ${product_sku} v${version}`);
+            
+            // Insert sub-steps and QC steps
+            const allSubStepParams = [];
+            const allSubStepPlaceholders = [];
+            paramIndex = 1;
+            let totalSubSteps = 0;
+            
+            steps.forEach(mainStep => {
+                if (mainStep.subSteps && mainStep.subSteps.length > 0) {
+                    totalSubSteps += mainStep.subSteps.length;
+                    mainStep.subSteps.forEach(subStep => {
+                        allSubStepPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4}, $${paramIndex+5})`);
+                        
+                        if (subStep.type === 'sub') {
+                            // For sub-steps include both main step number and sub-step number
+                            allSubStepParams.push(product_sku, version, mainStep.number, subStep.number, subStep.description, subStep.type);
+                        } else {
+                            // For QC steps, only include main step number, no sub-step number
+                            allSubStepParams.push(product_sku, version, mainStep.number, null, subStep.description, 'qc');
+                        }
+                        
+                        paramIndex += 6;
+                    });
+                }
+            });
+            
+            if (allSubStepPlaceholders.length > 0) {
+                // Insert sub-steps and QC steps
+                await client.query(`
+                    INSERT INTO MMRSubSteps (mmr_product_sku, mmr_version, main_step_number, sub_step_number, description, step_type)
+                    VALUES ${allSubStepPlaceholders.join(',')}
+                `, allSubStepParams);
+                console.log(`Added ${totalSubSteps} sub-steps to MMR ${product_sku} v${version}`);
+            }
+        }
+
+        // Insert equipment if provided
+        if (equipment && equipment.length > 0) {
+            const equipmentParams = [];
+            const equipmentPlaceholders = [];
+            let paramIndex = 1;
+            
+            equipment.forEach(item => {
+                equipmentPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2})`);
+                equipmentParams.push(product_sku, version, item);
+                paramIndex += 3;
+            });
+            
+            await client.query(`
+                INSERT INTO MMREquipment (mmr_product_sku, mmr_version, equipment_name)
+                VALUES ${equipmentPlaceholders.join(',')}
+            `, equipmentParams);
+            console.log(`Added ${equipment.length} equipment items to MMR ${product_sku} v${version}`);
+        }
+
+        // Insert packaging if provided
+        if (packaging && packaging.length > 0) {
+            const packagingParams = [];
+            const packagingPlaceholders = [];
+            let paramIndex = 1;
+            
+            packaging.forEach(item => {
+                packagingPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4})`);
+                packagingParams.push(product_sku, version, item.sku, item.quantity, item.unit);
+                paramIndex += 5;
+            });
+            
+            await client.query(`
+                INSERT INTO MMRPackaging (mmr_product_sku, mmr_version, packaging_sku, quantity, unit_type)
+                VALUES ${packagingPlaceholders.join(',')}
+            `, packagingParams);
+            console.log(`Added ${packaging.length} packaging items to MMR ${product_sku} v${version}`);
+        }
+
+        // Insert labels if provided
+        if (labels && labels.length > 0) {
+            const labelParams = [];
+            const labelPlaceholders = [];
+            let paramIndex = 1;
+            
+            labels.forEach(item => {
+                labelPlaceholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4})`);
+                labelParams.push(product_sku, version, item.sku, item.quantity, item.unit);
+                paramIndex += 5;
+            });
+            
+            await client.query(`
+                INSERT INTO MMRLabels (mmr_product_sku, mmr_version, label_sku, quantity, unit_type)
+                VALUES ${labelPlaceholders.join(',')}
+            `, labelParams);
+            console.log(`Added ${labels.length} label items to MMR ${product_sku} v${version}`);
+        }
+
+        await client.query('COMMIT');
+        console.log('MMR created successfully:', mmrResult.rows[0]);
+        res.status(201).json(mmrResult.rows[0]);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Error creating MMR:', err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Get all versions of an MMR for a product - IMPORTANT: This specific route must come BEFORE the generic /:version route
+app.get('/api/mmr/:product_sku/versions', authenticateToken, (req, res) => {
+    const productSku = req.params.product_sku;
+    console.log('MMR versions endpoint called for product SKU:', productSku);
+    
+    // Return hardcoded data
+    const mockedVersions = [
+        {
+            product_sku: productSku,
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            is_active: true,
+            base_quantity: 100
+        }
+    ];
+    
+    console.log('Returning mocked versions:', mockedVersions);
+    res.json(mockedVersions);
+});
+
+// Get latest MMR version for a product
+app.get('/api/mmr/:product_sku/latest', async (req, res) => {
+    try {
+        const result = await pgPool.query(
+            `SELECT * FROM MMRs 
+            WHERE product_sku = $1 AND is_active = true 
+            ORDER BY version DESC LIMIT 1`,
+            [req.params.product_sku]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'MMR not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get specific MMR details - This generic route must come AFTER more specific routes
+app.get('/api/mmr/:productSku/:version', authenticateToken, async (req, res) => {
+    try {
+        const { productSku, version } = req.params;
+        
+        // Validate that version is a number
+        if (isNaN(version)) {
+            return res.status(400).json({ error: 'Version must be a number' });
+        }
+        
+        // Get MMR base info
+        const mmrResult = await pgPool.query(`
+            SELECT * FROM MMRs 
+            WHERE product_sku = $1 AND version = $2 AND is_active = true
+        `, [productSku, version]);
+        
+        if (mmrResult.rows.length === 0) {
+            return res.status(404).json({ error: 'MMR not found' });
+        }
+        
+        // Get ingredients
+        const ingredientsResult = await pgPool.query(`
+            SELECT mi.*, ii.name as ingredient_name
+            FROM MMRIngredients mi
+            JOIN InventoryItems ii ON mi.ingredient_sku = ii.sku
+            WHERE mi.mmr_product_sku = $1 AND mi.mmr_version = $2
+            ORDER BY mi.ingredient_sku
+        `, [productSku, version]);
+        
+        // Get main steps
+        const stepsResult = await pgPool.query(`
+            SELECT * FROM MMRSteps
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+            ORDER BY step_number
+        `, [productSku, version]);
+        
+        // Get sub-steps
+        const subStepsResult = await pgPool.query(`
+            SELECT * FROM MMRSubSteps
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+            ORDER BY main_step_number, sub_step_number
+        `, [productSku, version]);
+        
+        // Get equipment
+        const equipmentResult = await pgPool.query(`
+            SELECT * FROM MMREquipment
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+        `, [productSku, version]);
+        
+        // Get packaging
+        const packagingResult = await pgPool.query(`
+            SELECT mp.*, ii.name as packaging_name
+            FROM MMRPackaging mp
+            JOIN InventoryItems ii ON mp.packaging_sku = ii.sku
+            WHERE mp.mmr_product_sku = $1 AND mp.mmr_version = $2
+        `, [productSku, version]);
+        
+        // Get labels
+        const labelsResult = await pgPool.query(`
+            SELECT ml.*, ii.name as label_name
+            FROM MMRLabels ml
+            JOIN InventoryItems ii ON ml.label_sku = ii.sku
+            WHERE ml.mmr_product_sku = $1 AND ml.mmr_version = $2
+        `, [productSku, version]);
+        
+        // Combine the sub-steps with main steps
+        const completeSteps = stepsResult.rows.map(mainStep => {
+            const subSteps = subStepsResult.rows.filter(
+                subStep => subStep.main_step_number === mainStep.step_number
+            );
+            
+            return {
+                ...mainStep,
+                subSteps: subSteps
+            };
+        });
+        
+        res.json({
+            ...mmrResult.rows[0],
+            ingredients: ingredientsResult.rows,
+            steps: completeSteps,
+            equipment: equipmentResult.rows,
+            packaging: packagingResult.rows,
+            labels: labelsResult.rows
+        });
+    } catch (err) {
+        console.error('Error fetching MMR details:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Debug endpoint - No authentication required for testing
+app.get('/api/debug/mmr/:productSku/:version', async (req, res) => {
+    try {
+        const { productSku, version } = req.params;
+        console.log(`DEBUG: Fetching MMR details for ${productSku} v${version}`);
+        
+        // Validate that version is a number
+        if (isNaN(version)) {
+            return res.status(400).json({ error: 'Version must be a number' });
+        }
+        
+        // Get MMR base info
+        const mmrResult = await pgPool.query(`
+            SELECT * FROM MMRs 
+            WHERE product_sku = $1 AND version = $2 AND is_active = true
+        `, [productSku, version]);
+        
+        if (mmrResult.rows.length === 0) {
+            return res.status(404).json({ error: 'MMR not found' });
+        }
+        
+        console.log(`DEBUG: Found MMR base info for ${productSku} v${version}`);
+        
+        // Get ingredients
+        const ingredientsResult = await pgPool.query(`
+            SELECT mi.*, ii.name as ingredient_name
+            FROM MMRIngredients mi
+            JOIN InventoryItems ii ON mi.ingredient_sku = ii.sku
+            WHERE mi.mmr_product_sku = $1 AND mi.mmr_version = $2
+            ORDER BY mi.ingredient_sku
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${ingredientsResult.rowCount} ingredients for ${productSku} v${version}`);
+        
+        // Get main steps
+        const stepsResult = await pgPool.query(`
+            SELECT * FROM MMRSteps
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+            ORDER BY step_number
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${stepsResult.rowCount} steps for ${productSku} v${version}`);
+        
+        // Get sub-steps
+        const subStepsResult = await pgPool.query(`
+            SELECT * FROM MMRSubSteps
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+            ORDER BY main_step_number, sub_step_number
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${subStepsResult.rowCount} sub-steps for ${productSku} v${version}`);
+        
+        // Get equipment
+        const equipmentResult = await pgPool.query(`
+            SELECT * FROM MMREquipment
+            WHERE mmr_product_sku = $1 AND mmr_version = $2
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${equipmentResult.rowCount} equipment items for ${productSku} v${version}`);
+        
+        // Get packaging
+        const packagingResult = await pgPool.query(`
+            SELECT mp.*, ii.name as packaging_name
+            FROM MMRPackaging mp
+            JOIN InventoryItems ii ON mp.packaging_sku = ii.sku
+            WHERE mp.mmr_product_sku = $1 AND mp.mmr_version = $2
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${packagingResult.rowCount} packaging items for ${productSku} v${version}`);
+        
+        // Get labels
+        const labelsResult = await pgPool.query(`
+            SELECT ml.*, ii.name as label_name
+            FROM MMRLabels ml
+            JOIN InventoryItems ii ON ml.label_sku = ii.sku
+            WHERE ml.mmr_product_sku = $1 AND ml.mmr_version = $2
+        `, [productSku, version]);
+        
+        console.log(`DEBUG: Found ${labelsResult.rowCount} labels for ${productSku} v${version}`);
+        
+        // Combine the sub-steps with main steps
+        const completeSteps = stepsResult.rows.map(mainStep => {
+            const subSteps = subStepsResult.rows.filter(
+                subStep => subStep.main_step_number === mainStep.step_number
+            );
+            
+            return {
+                ...mainStep,
+                subSteps: subSteps
+            };
+        });
+        
+        // Create full response object
+        const response = {
+            ...mmrResult.rows[0],
+            ingredients: ingredientsResult.rows,
+            steps: completeSteps,
+            equipment: equipmentResult.rows,
+            packaging: packagingResult.rows,
+            labels: labelsResult.rows
+        };
+        
+        console.log(`DEBUG: Complete MMR details assembled with:
+            - ${response.ingredients.length} ingredients
+            - ${response.steps.length} steps
+            - ${response.equipment.length} equipment items
+            - ${response.packaging.length} packaging items
+            - ${response.labels.length} labels`);
+            
+        res.json(response);
+    } catch (err) {
+        console.error('DEBUG ERROR: Error fetching MMR details:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Debug endpoint to add test data to an MMR
+app.post('/api/debug/mmr/:productSku/:version/add-test-data', async (req, res) => {
+    const client = await pgPool.connect();
+    try {
+        const { productSku, version } = req.params;
+        const { packaging, labels } = req.body;
+        
+        console.log(`DEBUG: Adding test data to MMR ${productSku} v${version}:`, {
+            packaging: packaging?.length || 0,
+            labels: labels?.length || 0
+        });
+        
+        await client.query('BEGIN');
+        
+        // Check if the MMR exists
+        const mmrCheck = await client.query(
+            'SELECT product_sku FROM MMRs WHERE product_sku = $1 AND version = $2 AND is_active = true',
+            [productSku, version]
+        );
+        
+        if (mmrCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'MMR not found' });
+        }
+        
+        // Add a test ingredient
+        const testIngredient = {
+            sku: "ING-001",
+            name: "Maitake Mushroom Powder",
+            quantity: 500,
+            unit: "mg"
+        };
+        
+        // Check if ingredient exists in inventory
+        const ingredientCheck = await client.query(
+            'SELECT sku FROM InventoryItems WHERE sku = $1',
+            [testIngredient.sku]
+        );
+        
+        if (ingredientCheck.rows.length === 0) {
+            // Create the item with simplified schema
+            await client.query(
+                `INSERT INTO InventoryItems (sku, name, type, stock_level, unit_type) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [testIngredient.sku, testIngredient.name, 'raw ingredient', 10000, testIngredient.unit]
+            );
+            console.log(`DEBUG: Created test ingredient ${testIngredient.sku}`);
+        }
+        
+        // Check if ingredient is already in the MMR
+        const ingredientMMRCheck = await client.query(
+            'SELECT ingredient_sku FROM MMRIngredients WHERE mmr_product_sku = $1 AND mmr_version = $2 AND ingredient_sku = $3',
+            [productSku, version, testIngredient.sku]
+        );
+        
+        if (ingredientMMRCheck.rows.length === 0) {
+            // Add to MMRIngredients
+            await client.query(
+                `INSERT INTO MMRIngredients (mmr_product_sku, mmr_version, ingredient_sku, quantity, unit_type)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [productSku, version, testIngredient.sku, testIngredient.quantity, testIngredient.unit]
+            );
+            console.log(`DEBUG: Added ingredient ${testIngredient.sku} to MMR ${productSku} v${version}`);
+        } else {
+            // Update existing record
+            await client.query(
+                `UPDATE MMRIngredients 
+                 SET quantity = $4, unit_type = $5
+                 WHERE mmr_product_sku = $1 AND mmr_version = $2 AND ingredient_sku = $3`,
+                [productSku, version, testIngredient.sku, testIngredient.quantity, testIngredient.unit]
+            );
+            console.log(`DEBUG: Updated ingredient ${testIngredient.sku} in MMR ${productSku} v${version}`);
+        }
+        
+        // Create test inventory items if they don't exist
+        if (packaging && packaging.length > 0) {
+            for (const item of packaging) {
+                // Check if item exists
+                const itemCheck = await client.query(
+                    'SELECT sku FROM InventoryItems WHERE sku = $1',
+                    [item.sku]
+                );
+                
+                if (itemCheck.rows.length === 0) {
+                    // Create the item with simplified schema
+                    await client.query(
+                        `INSERT INTO InventoryItems (sku, name, type, stock_level, unit_type) 
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [item.sku, item.name, 'packaging', 1000, item.unit]
+                    );
+                    console.log(`DEBUG: Created test packaging item ${item.sku}`);
+                }
+                
+                // Check if packaging is already in the MMR
+                const packagingCheck = await client.query(
+                    'SELECT packaging_sku FROM MMRPackaging WHERE mmr_product_sku = $1 AND mmr_version = $2 AND packaging_sku = $3',
+                    [productSku, version, item.sku]
+                );
+                
+                if (packagingCheck.rows.length === 0) {
+                    // Add to MMRPackaging
+                    await client.query(
+                        `INSERT INTO MMRPackaging (mmr_product_sku, mmr_version, packaging_sku, quantity, unit_type)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                    console.log(`DEBUG: Added packaging item ${item.sku} to MMR ${productSku} v${version}`);
+                } else {
+                    // Update existing record
+                    await client.query(
+                        `UPDATE MMRPackaging 
+                         SET quantity = $4, unit_type = $5
+                         WHERE mmr_product_sku = $1 AND mmr_version = $2 AND packaging_sku = $3`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                    console.log(`DEBUG: Updated packaging item ${item.sku} in MMR ${productSku} v${version}`);
+                }
+            }
+        }
+        
+        // Create test label items if they don't exist
+        if (labels && labels.length > 0) {
+            for (const item of labels) {
+                // Check if item exists
+                const itemCheck = await client.query(
+                    'SELECT sku FROM InventoryItems WHERE sku = $1',
+                    [item.sku]
+                );
+                
+                if (itemCheck.rows.length === 0) {
+                    // Create the item with simplified schema
+                    await client.query(
+                        `INSERT INTO InventoryItems (sku, name, type, stock_level, unit_type) 
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [item.sku, item.name, 'label', 1000, item.unit]
+                    );
+                    console.log(`DEBUG: Created test label item ${item.sku}`);
+                }
+                
+                // Check if label is already in the MMR
+                const labelCheck = await client.query(
+                    'SELECT label_sku FROM MMRLabels WHERE mmr_product_sku = $1 AND mmr_version = $2 AND label_sku = $3',
+                    [productSku, version, item.sku]
+                );
+                
+                if (labelCheck.rows.length === 0) {
+                    // Add to MMRLabels
+                    await client.query(
+                        `INSERT INTO MMRLabels (mmr_product_sku, mmr_version, label_sku, quantity, unit_type)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                    console.log(`DEBUG: Added label item ${item.sku} to MMR ${productSku} v${version}`);
+                } else {
+                    // Update existing record
+                    await client.query(
+                        `UPDATE MMRLabels 
+                         SET quantity = $4, unit_type = $5
+                         WHERE mmr_product_sku = $1 AND mmr_version = $2 AND label_sku = $3`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                    console.log(`DEBUG: Updated label item ${item.sku} in MMR ${productSku} v${version}`);
+                }
+            }
+        }
+        
+        await client.query('COMMIT');
+        res.json({ success: true, message: `Added test data to MMR ${productSku} v${version}` });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('DEBUG ERROR: Error adding test data to MMR:', err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Debug endpoint to get inventory items without authentication
+app.get('/api/debug/inventory', async (req, res) => {
+    try {
+        console.log('DEBUG: Fetching inventory items');
+        
+        // Get all inventory items
+        const result = await pgPool.query(`
+            SELECT * FROM InventoryItems
+            ORDER BY type, name
+        `);
+        
+        console.log(`DEBUG: Found ${result.rowCount} inventory items`);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('DEBUG ERROR: Error fetching inventory items:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/mmr/:product_sku/:version', authenticateToken, checkPermission('update_mmr'), async (req, res) => {
+    try {
+        const productSku = req.params.product_sku;
+        const version = req.params.version;
+        const { 
+            base_quantity, 
+            base_unit, 
+            ingredients, 
+            equipment, 
+            steps, 
+            packaging, 
+            labels 
+        } = req.body;
+
+        console.log(`Updating MMR for ${productSku} v${version}`);
+        console.log('Request body:', req.body);
+        
+        // Validate required fields
+        if (!base_quantity || !base_unit) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        
+        // Start a transaction
+        const client = await pgPool.connect();
+        try {
+            await client.query('BEGIN');
+            
+            // Update base MMR information
+            const updateMMRQuery = `
+                UPDATE MMRs
+                SET base_quantity = $1, base_unit = $2, updated_at = NOW()
+                WHERE product_sku = $3 AND version = $4
+            `;
+            
+            const mmrResult = await client.query(updateMMRQuery, [
+                base_quantity, 
+                base_unit, 
+                productSku, 
+                version
+            ]);
+            
+            if (mmrResult.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'MMR not found' });
+            }
+            
+            // Delete existing related records for this MMR
+            await client.query('DELETE FROM MMRIngredients WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            await client.query('DELETE FROM MMRSteps WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            await client.query('DELETE FROM MMRSubSteps WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            await client.query('DELETE FROM MMREquipment WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            await client.query('DELETE FROM MMRPackaging WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            await client.query('DELETE FROM MMRLabels WHERE mmr_product_sku = $1 AND mmr_version = $2', [productSku, version]);
+            
+            // Insert ingredients
+            if (ingredients && ingredients.length > 0) {
+                for (const ingredient of ingredients) {
+                    await client.query(
+                        `INSERT INTO MMRIngredients (mmr_product_sku, mmr_version, ingredient_sku, quantity, unit_type)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [productSku, version, ingredient.sku, ingredient.quantity, ingredient.unit]
+                    );
+                }
+            }
+            
+            // Insert equipment
+            if (equipment && equipment.length > 0) {
+                for (const item of equipment) {
+                    await client.query(
+                        `INSERT INTO MMREquipment (mmr_product_sku, mmr_version, equipment_name)
+                         VALUES ($1, $2, $3)`,
+                        [productSku, version, item.name]
+                    );
+                }
+            }
+            
+            // Insert packaging
+            if (packaging && packaging.length > 0) {
+                for (const item of packaging) {
+                    await client.query(
+                        `INSERT INTO MMRPackaging (mmr_product_sku, mmr_version, packaging_sku, quantity, unit_type)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                }
+            }
+            
+            // Insert labels
+            if (labels && labels.length > 0) {
+                for (const item of labels) {
+                    await client.query(
+                        `INSERT INTO MMRLabels (mmr_product_sku, mmr_version, label_sku, quantity, unit_type)
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [productSku, version, item.sku, item.quantity, item.unit]
+                    );
+                }
+            }
+            
+            // Insert steps and sub-steps
+            if (steps && steps.length > 0) {
+                for (const step of steps) {
+                    // Insert main step
+                    await client.query(
+                        `INSERT INTO MMRSteps (mmr_product_sku, mmr_version, step_number, description)
+                         VALUES ($1, $2, $3, $4)`,
+                        [productSku, version, step.step_number, step.title]
+                    );
+                    
+                    // Insert sub-steps if they exist
+                    if (step.subSteps && step.subSteps.length > 0) {
+                        for (const subStep of step.subSteps) {
+                            await client.query(
+                                `INSERT INTO MMRSubSteps (mmr_product_sku, mmr_version, main_step_number, sub_step_number, description, step_type)
+                                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                                [
+                                    productSku,
+                                    version,
+                                    step.step_number,
+                                    subStep.sub_step_number || null,
+                                    subStep.description || '',
+                                    subStep.step_type || 'sub'
+                                ]
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // Commit the transaction
+            await client.query('COMMIT');
+            res.status(200).json({ 
+                message: 'MMR updated successfully'
+            });
+            
+        } catch (error) {
+            // Rollback in case of error
+            await client.query('ROLLBACK');
+            console.error('Error updating MMR:', error);
+            res.status(500).json({ error: 'Error updating MMR: ' + error.message });
+        } finally {
+            client.release();
+        }
+        
+    } catch (error) {
+        console.error('Error in MMR update handler:', error);
+        res.status(500).json({ error: 'Server error: ' + error.message });
+    }
+});
+
+// Sales endpoints
+app.get('/api/sales/status', async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT 
+                platform,
+                COUNT(*) as total_orders,
+                SUM(total_amount) as total_sales,
+                MAX(order_date) as last_sync
+            FROM SalesOrders
+            GROUP BY platform
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching sales status:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/sales/sync-products', async (req, res) => {
+    try {
+        await shopifyIntegration.syncProducts();
+        res.json({ message: 'Products synced successfully' });
+    } catch (err) {
+        console.error('Error syncing products:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/sales/sync-all', async (req, res) => {
+    try {
+        console.log('Starting full sync process...');
+        
+        // First sync products
+        console.log('Syncing products...');
+        await shopifyIntegration.syncProducts();
+        console.log('Product sync completed');
+        
+        // Then sync sales
+        console.log('Syncing sales...');
+        await salesSyncService.syncAllPlatforms();
+        console.log('Sales sync completed');
+        
+        res.json({ message: 'Products and sales sync completed successfully' });
+    } catch (error) {
+        console.error('Sync failed:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Schedule automatic sync every hour
+cron.schedule('0 * * * *', async () => {
+    try {
+        console.log('Starting scheduled sales sync...');
+        await salesSyncService.syncAllPlatforms();
+        console.log('Scheduled sales sync completed successfully');
+    } catch (err) {
+        console.error('Error during scheduled sales sync:', err);
+    }
+});
+
+// Get simplified sales data
+app.get('/api/sales/simple', async (req, res) => {
+    try {
+        const { start_date, end_date, platform, product_sku } = req.query;
+        let query = 'SELECT * FROM Sales WHERE 1=1';
+        const params = [];
+        let paramCount = 1;
+
+        if (start_date) {
+            query += ` AND sale_date >= $${paramCount}`;
+            params.push(start_date);
+            paramCount++;
+        }
+
+        if (end_date) {
+            query += ` AND sale_date <= $${paramCount}`;
+            params.push(end_date);
+            paramCount++;
+        }
+
+        if (platform) {
+            query += ` AND platform = $${paramCount}`;
+            params.push(platform);
+            paramCount++;
+        }
+
+        if (product_sku) {
+            query += ` AND product_sku = $${paramCount}`;
+            params.push(product_sku);
+            paramCount++;
+        }
+
+        query += ' ORDER BY sale_date DESC';
+
+        const result = await pgPool.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching sales data:', err);
+        res.status(500).json({ error: 'Failed to fetch sales data' });
+    }
+});
+
+// Get sales summary by product
+app.get('/api/sales/summary', authenticateToken, checkPermission('view_sales'), async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT 
+                product_sku,
+                COUNT(*) as total_sales,
+                SUM(quantity) as total_quantity,
+                COUNT(DISTINCT order_id) as total_orders,
+                COUNT(DISTINCT batch_number) as total_batches,
+                MIN(sale_date) as first_sale,
+                MAX(sale_date) as last_sale
+            FROM Sales
+            GROUP BY product_sku
+            ORDER BY total_quantity DESC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching sales summary:', err);
+        res.status(500).json({ error: 'Failed to fetch sales summary' });
+    }
+});
+
+// Get batch traceability for a product
+app.get('/api/sales/trace/:product_sku', async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT 
+                batch_number,
+                COUNT(*) as total_sales,
+                SUM(quantity) as total_quantity,
+                COUNT(DISTINCT order_id) as total_orders,
+                MIN(sale_date) as first_sale,
+                MAX(sale_date) as last_sale
+            FROM Sales
+            WHERE product_sku = $1
+            GROUP BY batch_number
+            ORDER BY first_sale DESC
+        `, [req.params.product_sku]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching batch traceability:', err);
+        res.status(500).json({ error: 'Failed to fetch batch traceability' });
+    }
+});
+
+// Get batch traceability with sales data
+app.get('/api/traceability/:batchNumber', async (req, res) => {
+    try {
+        // First, get the inventory items with this batch number
+        const inventoryResult = await pgPool.query(`
+            SELECT ii.*, po.id as production_order_id, po.product_sku, po.quantity as production_quantity
+            FROM InventoryItems ii
+            LEFT JOIN ProductionOrders po ON ii.batch_number = po.finished_batch_number
+            WHERE ii.batch_number = $1 AND ii.type = 'finished good'
+        `, [req.params.batchNumber]);
+
+        if (inventoryResult.rows.length === 0) {
+            return res.status(404).json({ error: 'No inventory items found with this batch number' });
+        }
+
+        // Get sales data for this batch
+        const salesResult = await pgPool.query(`
+            SELECT 
+                so.id as order_id,
+                so.platform,
+                so.store_name,
+                so.order_date,
+                so.customer_id,
+                so.total_amount,
+                soi.product_sku,
+                soi.quantity as sale_quantity,
+                soi.unit_price,
+                sim.quantity as batch_quantity
+            FROM SalesInventoryMapping sim
+            JOIN SalesOrderItems soi ON sim.sales_order_item_id = soi.id
+            JOIN SalesOrders so ON soi.sales_order_id = so.id
+            WHERE sim.inventory_batch_number = $1
+            ORDER BY so.order_date DESC
+        `, [req.params.batchNumber]);
+
+        // Get production details if this is a finished good
+        const productionResult = await pgPool.query(`
+            SELECT 
+                po.*,
+                json_agg(json_build_object(
+                    'step_number', ps.step_number,
+                    'description', ps.description,
+                    'completed', ps.completed,
+                    'completed_by', ps.completed_by,
+                    'completed_at', ps.completed_at
+                ) ORDER BY ps.step_number) as steps,
+                json_agg(json_build_object(
+                    'item_sku', pb.item_sku,
+                    'quantity_used', pb.quantity_used,
+                    'batch_number', pb.batch_number
+                )) as batches_used
+            FROM ProductionOrders po
+            LEFT JOIN ProductionSteps ps ON po.id = ps.production_order_id
+            LEFT JOIN ProductionBatches pb ON po.id = pb.production_order_id
+            WHERE po.finished_batch_number = $1
+            GROUP BY po.id
+        `, [req.params.batchNumber]);
+
+        // Combine all the data
+        const response = {
+            batch_number: req.params.batchNumber,
+            inventory_items: inventoryResult.rows,
+            sales_data: salesResult.rows,
+            production_data: productionResult.rows[0] || null,
+            summary: {
+                total_produced: inventoryResult.rows.reduce((sum, item) => sum + item.stock_level, 0),
+                total_sold: salesResult.rows.reduce((sum, sale) => sum + sale.batch_quantity, 0),
+                total_customers: new Set(salesResult.rows.map(sale => sale.customer_id)).size,
+                total_orders: new Set(salesResult.rows.map(sale => sale.order_id)).size,
+                first_sale: salesResult.rows.length > 0 ? salesResult.rows[salesResult.rows.length - 1].order_date : null,
+                last_sale: salesResult.rows.length > 0 ? salesResult.rows[0].order_date : null
+            }
+        };
+
+        res.json(response);
+    } catch (err) {
+        console.error('Error fetching batch traceability:', err);
+        res.status(500).json({ error: 'Failed to fetch batch traceability data' });
+    }
+});
+
+// Comprehensive batch traceability search
+app.get('/api/search/traceability', async (req, res) => {
+    try {
+        const { batch_number, product_sku, customer_id } = req.query;
+        
+        if (!batch_number && !product_sku && !customer_id) {
+            return res.status(400).json({ error: 'At least one search parameter is required' });
+        }
+
+        let query = `
+            WITH RECURSIVE batch_trace AS (
+                -- Base case: Get initial inventory items
+                SELECT 
+                    ii.id,
+                    ii.sku,
+                    ii.name,
+                    ii.type,
+                    ii.batch_number,
+                    ii.stock_level,
+                    ii.unit_type,
+                    ii.created_at,
+                    NULL::INT as production_order_id,
+                    NULL::VARCHAR as customer_id,
+                    NULL::VARCHAR as order_id,
+                    NULL::TIMESTAMP as sale_date,
+                    NULL::INT as quantity_sold,
+                    1 as level
+                FROM InventoryItems ii
+                WHERE ($1::VARCHAR IS NULL OR ii.batch_number = $1)
+                AND ($2::VARCHAR IS NULL OR ii.sku = $2)
+                
+                UNION ALL
+                
+                -- Recursive case: Get production orders and sales
+                SELECT 
+                    ii.id,
+                    ii.sku,
+                    ii.name,
+                    ii.type,
+                    ii.batch_number,
+                    ii.stock_level,
+                    ii.unit_type,
+                    ii.created_at,
+                    po.id as production_order_id,
+                    so.customer_id,
+                    so.id as order_id,
+                    so.order_date as sale_date,
+                    soi.quantity as quantity_sold,
+                    bt.level + 1
+                FROM batch_trace bt
+                LEFT JOIN ProductionBatches pb ON bt.batch_number = pb.batch_number
+                LEFT JOIN ProductionOrders po ON pb.production_order_id = po.id
+                LEFT JOIN InventoryItems ii ON po.finished_batch_number = ii.batch_number
+                LEFT JOIN SalesInventoryMapping sim ON ii.batch_number = sim.inventory_batch_number
+                LEFT JOIN SalesOrderItems soi ON sim.sales_order_item_id = soi.id
+                LEFT JOIN SalesOrders so ON soi.sales_order_id = so.id
+                WHERE bt.level < 3  -- Limit recursion depth
+                AND ($3::VARCHAR IS NULL OR so.customer_id = $3)
+            )
+            SELECT 
+                bt.*,
+                CASE 
+                    WHEN bt.type = 'finished good' THEN (
+                        SELECT json_agg(json_build_object(
+                            'step_number', ps.step_number,
+                            'description', ps.description,
+                            'completed', ps.completed,
+                            'completed_by', ps.completed_by,
+                            'completed_at', ps.completed_at
+                        ) ORDER BY ps.step_number)
+                        FROM ProductionSteps ps
+                        WHERE ps.production_order_id = bt.production_order_id
+                    )
+                    ELSE NULL
+                END as production_steps,
+                CASE 
+                    WHEN bt.type = 'finished good' THEN (
+                        SELECT json_agg(json_build_object(
+                            'item_sku', pb.item_sku,
+                            'quantity_used', pb.quantity_used,
+                            'batch_number', pb.batch_number
+                        ))
+                        FROM ProductionBatches pb
+                        WHERE pb.production_order_id = bt.production_order_id
+                    )
+                    ELSE NULL
+                END as batches_used
+            FROM batch_trace bt
+            ORDER BY bt.level, bt.created_at DESC
+        `;
+
+        const result = await pgPool.query(query, [batch_number, product_sku, customer_id]);
+
+        // Process and format the results
+        const traceData = {
+            search_criteria: {
+                batch_number,
+                product_sku,
+                customer_id
+            },
+            raw_materials: result.rows.filter(item => item.type === 'raw ingredient'),
+            finished_goods: result.rows.filter(item => item.type === 'finished good'),
+            sales: result.rows.filter(item => item.customer_id !== null),
+            summary: {
+                total_items: result.rows.length,
+                unique_batches: new Set(result.rows.map(item => item.batch_number)).size,
+                unique_customers: new Set(result.rows.map(item => item.customer_id).filter(Boolean)).size,
+                total_orders: new Set(result.rows.map(item => item.order_id).filter(Boolean)).size,
+                total_sales: result.rows.filter(item => item.customer_id !== null).length
+            }
+        };
+
+        res.json(traceData);
+    } catch (err) {
+        console.error('Error in traceability search:', err);
+        res.status(500).json({ error: 'Failed to perform traceability search' });
+    }
+});
+
+// Inventory Dashboard
+app.get('/api/reports/inventory', async (req, res) => {
+    try {
+        // Get current inventory levels
+        const inventoryResult = await pgPool.query(`
+            SELECT 
+                type,
+                COUNT(*) as total_items,
+                SUM(stock_level) as total_stock,
+                AVG(stock_level) as avg_stock,
+                MIN(stock_level) as min_stock,
+                MAX(stock_level) as max_stock
+            FROM InventoryItems
+            GROUP BY type
+        `);
+
+        // Get inventory turnover (last 30 days)
+        const turnoverResult = await pgPool.query(`
+            WITH sales_data AS (
+                SELECT 
+                    soi.product_sku,
+                    SUM(soi.quantity) as total_sold,
+                    COUNT(DISTINCT so.id) as order_count
+                FROM SalesOrderItems soi
+                JOIN SalesOrders so ON soi.sales_order_id = so.id
+                WHERE so.order_date >= NOW() - INTERVAL '30 days'
+                GROUP BY soi.product_sku
+            )
+            SELECT 
+                ii.sku,
+                ii.name,
+                ii.type,
+                ii.stock_level,
+                COALESCE(sd.total_sold, 0) as units_sold,
+                COALESCE(sd.order_count, 0) as order_count,
+                CASE 
+                    WHEN ii.stock_level > 0 THEN COALESCE(sd.total_sold::float / ii.stock_level, 0)
+                    ELSE 0
+                END as turnover_rate
+            FROM InventoryItems ii
+            LEFT JOIN sales_data sd ON ii.sku = sd.product_sku
+            ORDER BY turnover_rate DESC
+        `);
+
+        // Get low stock alerts
+        const lowStockResult = await pgPool.query(`
+            SELECT 
+                sku,
+                name,
+                type,
+                stock_level,
+                unit_type
+            FROM InventoryItems
+            WHERE stock_level <= 10
+            ORDER BY stock_level ASC
+        `);
+
+        res.json({
+            inventory_summary: inventoryResult.rows,
+            turnover_analysis: turnoverResult.rows,
+            low_stock_alerts: lowStockResult.rows
+        });
+    } catch (err) {
+        console.error('Error generating inventory report:', err);
+        res.status(500).json({ error: 'Failed to generate inventory report' });
+    }
+});
+
+// Production Efficiency Dashboard
+app.get('/api/reports/production-efficiency', async (req, res) => {
+    try {
+        // Get average time per step
+        const stepTimingResult = await pgPool.query(`
+            WITH step_timing AS (
+                SELECT 
+                    ps.production_order_id,
+                    ps.step_number,
+                    ps.description,
+                    EXTRACT(EPOCH FROM (ps.completed_at - ps.created_at))/3600 as hours_taken
+                FROM ProductionSteps ps
+                WHERE ps.completed = true
+                AND ps.completed_at IS NOT NULL
+            )
+            SELECT 
+                step_number,
+                description,
+                COUNT(*) as total_completions,
+                AVG(hours_taken) as avg_hours,
+                MIN(hours_taken) as min_hours,
+                MAX(hours_taken) as max_hours,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY hours_taken) as median_hours
+            FROM step_timing
+            GROUP BY step_number, description
+            ORDER BY step_number
+        `);
+
+        // Get production bottlenecks
+        const bottlenecksResult = await pgPool.query(`
+            WITH step_timing AS (
+                SELECT 
+                    ps.production_order_id,
+                    ps.step_number,
+                    ps.description,
+                    EXTRACT(EPOCH FROM (ps.completed_at - ps.created_at))/3600 as hours_taken
+                FROM ProductionSteps ps
+                WHERE ps.completed = true
+                AND ps.completed_at IS NOT NULL
+            )
+            SELECT 
+                step_number,
+                description,
+                COUNT(*) as total_completions,
+                AVG(hours_taken) as avg_hours,
+                COUNT(*) * AVG(hours_taken) as total_hours
+            FROM step_timing
+            GROUP BY step_number, description
+            ORDER BY total_hours DESC
+            LIMIT 5
+        `);
+
+        // Get production success rate
+        const successRateResult = await pgPool.query(`
+            SELECT 
+                COUNT(*) as total_orders,
+                COUNT(*) FILTER (WHERE status = 'Completed') as completed_orders,
+                COUNT(*) FILTER (WHERE status = 'Cancelled') as cancelled_orders,
+                ROUND(COUNT(*) FILTER (WHERE status = 'Completed')::float / COUNT(*) * 100, 2) as success_rate
+            FROM ProductionOrders
+            WHERE created_at >= NOW() - INTERVAL '30 days'
+        `);
+
+        res.json({
+            step_timing: stepTimingResult.rows,
+            bottlenecks: bottlenecksResult.rows,
+            success_rate: successRateResult.rows[0]
+        });
+    } catch (err) {
+        console.error('Error generating production efficiency report:', err);
+        res.status(500).json({ error: 'Failed to generate production efficiency report' });
+    }
+});
+
+// Cost Analysis Dashboard
+app.get('/api/reports/cost-analysis', async (req, res) => {
+    try {
+        // Get ingredient costs
+        const ingredientCostsResult = await pgPool.query(`
+            WITH production_costs AS (
+                SELECT 
+                    pb.item_sku,
+                    ii.name,
+                    SUM(pb.quantity_used) as total_quantity,
+                    COUNT(DISTINCT po.id) as production_count
+                FROM ProductionBatches pb
+                JOIN InventoryItems ii ON pb.item_id = ii.id
+                JOIN ProductionOrders po ON pb.production_order_id = po.id
+                WHERE po.created_at >= NOW() - INTERVAL '30 days'
+                GROUP BY pb.item_sku, ii.name
+            )
+            SELECT 
+                pc.*,
+                ii.unit_cost,
+                (pc.total_quantity * ii.unit_cost) as total_cost
+            FROM production_costs pc
+            JOIN InventoryItems ii ON pc.item_sku = ii.sku
+            ORDER BY total_cost DESC
+        `);
+
+        // Get cost per finished good
+        const finishedGoodCostsResult = await pgPool.query(`
+            WITH production_costs AS (
+                SELECT 
+                    po.finished_batch_number,
+                    SUM(pb.quantity_used * ii.unit_cost) as total_cost,
+                    po.quantity as units_produced
+                FROM ProductionOrders po
+                JOIN ProductionBatches pb ON po.id = pb.production_order_id
+                JOIN InventoryItems ii ON pb.item_id = ii.id
+                WHERE po.status = 'Completed'
+                AND po.created_at >= NOW() - INTERVAL '30 days'
+                GROUP BY po.finished_batch_number, po.quantity
+            )
+            SELECT 
+                ii.sku,
+                ii.name,
+                COUNT(DISTINCT pc.finished_batch_number) as batch_count,
+                SUM(pc.total_cost) as total_cost,
+                SUM(pc.units_produced) as total_units,
+                ROUND(SUM(pc.total_cost)::float / SUM(pc.units_produced), 2) as cost_per_unit
+            FROM production_costs pc
+            JOIN InventoryItems ii ON pc.finished_batch_number = ii.batch_number
+            GROUP BY ii.sku, ii.name
+            ORDER BY total_cost DESC
+        `);
+
+        // Get cost trends
+        const costTrendsResult = await pgPool.query(`
+            WITH daily_costs AS (
+                SELECT 
+                    DATE(po.created_at) as production_date,
+                    SUM(pb.quantity_used * ii.unit_cost) as daily_cost,
+                    SUM(po.quantity) as daily_units
+                FROM ProductionOrders po
+                JOIN ProductionBatches pb ON po.id = pb.production_order_id
+                JOIN InventoryItems ii ON pb.item_id = ii.id
+                WHERE po.status = 'Completed'
+                AND po.created_at >= NOW() - INTERVAL '30 days'
+                GROUP BY DATE(po.created_at)
+            )
+            SELECT 
+                production_date,
+                daily_cost,
+                daily_units,
+                ROUND(daily_cost::float / daily_units, 2) as cost_per_unit
+            FROM daily_costs
+            ORDER BY production_date
+        `);
+
+        res.json({
+            ingredient_costs: ingredientCostsResult.rows,
+            finished_good_costs: finishedGoodCostsResult.rows,
+            cost_trends: costTrendsResult.rows
+        });
+    } catch (err) {
+        console.error('Error generating cost analysis report:', err);
+        res.status(500).json({ error: 'Failed to generate cost analysis report' });
+    }
+});
+
+// Test endpoint for MMR versions
+app.get('/api/mmr/:product_sku/test', authenticateToken, async (req, res) => {
+    try {
+        const productSku = req.params.product_sku;
+        console.log('Test endpoint called for product SKU:', productSku);
+        
+        // Return hardcoded test data
+        const testData = [
+            {
+                product_sku: productSku,
+                version: 1,
+                is_active: true,
+                created_at: new Date().toISOString()
+            }
+        ];
+        
+        console.log('Returning test data:', testData);
+        res.json(testData);
+    } catch (err) {
+        console.error('Error in test endpoint:', err);
+        res.status(500).json({ error: 'Test endpoint error', message: err.message });
+    }
+});
+
+// Test endpoint for MMR versions
+app.get('/api/test-mmr', async (req, res) => {
+    try {
+        const result = await pgPool.query(`
+            SELECT m.product_sku, m.version, m.base_quantity, m.created_by, 
+                   m.created_at, m.updated_at, m.is_active, ii.name 
+            FROM MMRs m 
+            JOIN InventoryItems ii ON m.product_sku = ii.sku 
+            WHERE m.product_sku = 'P-15002.1-TEST'`);
+
+        console.log('Test query executed, result:', result.rows);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error in test query:', err);
+        res.status(500).json({ error: 'Test query error', message: err.message });
+    }
+});
+
+// Receive shipment endpoint
+app.post('/api/inventory/receive', authenticateToken, checkPermission('update_inventory'), async (req, res) => {
+    const client = await pgPool.connect();
+    try {
+        const {
+            receipt_number,
+            supplier,
+            delivery_date,
+            received_by,
+            shipment_temperature,
+            quality_status,
+            items
+        } = req.body;
+
+        // Validate required fields
+        if (!receipt_number || !supplier || !delivery_date || !received_by || !quality_status || !items || !Array.isArray(items)) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        await client.query('BEGIN');
+
+        // Process each item in the shipment
+        for (const item of items) {
+            const { sku, quantity, batch_number, expiration_date, notes } = item;
+
+            // Validate item data
+            if (!sku || !quantity || quantity <= 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ error: `Invalid data for item SKU: ${sku}` });
+            }
+
+            // Check if item exists
+            const itemCheck = await client.query(
+                'SELECT id, stock_level FROM InventoryItems WHERE sku = $1',
+                [sku]
+            );
+
+            if (itemCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: `Item with SKU ${sku} not found` });
+            }
+
+            // Update inventory item
+            const updateFields = ['stock_level = stock_level + $1'];
+            const updateValues = [quantity];
+            let valueIndex = 2;
+
+            if (batch_number) {
+                updateFields.push(`batch_number = $${valueIndex}`);
+                updateValues.push(batch_number);
+                valueIndex++;
+
+                // Add or update the batch in InventoryBatches table
+                await client.query(
+                    `INSERT INTO InventoryBatches 
+                    (inventory_item_id, batch_number, stock_level)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (inventory_item_id, batch_number) 
+                    DO UPDATE SET
+                        stock_level = InventoryBatches.stock_level + $3,
+                        updated_at = CURRENT_TIMESTAMP`,
+                    [itemCheck.rows[0].id, batch_number, quantity]
+                );
+            }
+
+            const updateQuery = `
+                UPDATE InventoryItems 
+                SET ${updateFields.join(', ')}
+                WHERE sku = $${valueIndex}
+                RETURNING *
+            `;
+            updateValues.push(sku);
+
+            await client.query(updateQuery, updateValues);
+
+            // Log the receipt in a new table (you may want to create this table)
+            await client.query(
+                `INSERT INTO InventoryReceipts 
+                (receipt_number, sku, quantity, batch_number, supplier, delivery_date, 
+                received_by, shipment_temperature, quality_status, expiration_date, notes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                [
+                    receipt_number,
+                    sku,
+                    quantity,
+                    batch_number || null,
+                    supplier,
+                    delivery_date,
+                    received_by,
+                    shipment_temperature || null,
+                    quality_status,
+                    expiration_date || null,
+                    notes || null
+                ]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.status(200).json({ message: 'Shipment received successfully' });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error receiving shipment:', error);
+        res.status(500).json({ error: 'Failed to receive shipment', details: error.message });
+    } finally {
+        client.release();
+    }
+});
+
+// Search inventory items
+app.get('/api/inventory/search', authenticateToken, async (req, res) => {
+    try {
+        const searchTerm = req.query.term ? req.query.term.toLowerCase() : '';
+        const query = `
+            SELECT sku, name, type, stock_level, unit_type
+            FROM inventoryitems
+            WHERE LOWER(name) LIKE $1 OR LOWER(sku) LIKE $1
+            ORDER BY name
+            LIMIT 10
+        `;
+        const result = await pgPool.query(query, [`%${searchTerm}%`]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error searching inventory items:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Debug endpoint to get all MMRs without authentication
+app.get('/api/debug/mmr', async (req, res) => {
+    try {
+        console.log('DEBUG: Fetching all MMRs');
+        
+        const result = await pgPool.query(`
+            SELECT m.*, 
+                   COUNT(DISTINCT mi.ingredient_sku) as ingredient_count,
+                   COUNT(DISTINCT ms.step_number) as step_count
+            FROM MMRs m
+            LEFT JOIN MMRIngredients mi ON m.product_sku = mi.mmr_product_sku AND m.version = mi.mmr_version
+            LEFT JOIN MMRSteps ms ON m.product_sku = ms.mmr_product_sku AND m.version = ms.mmr_version
+            GROUP BY m.product_sku, m.version, m.base_quantity, m.base_unit, m.created_by, m.created_at, m.updated_at, m.is_active
+            ORDER BY m.product_sku, m.version DESC
+        `);
+        
+        console.log(`DEBUG: Found ${result.rowCount} MMRs`);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('DEBUG ERROR: Error fetching MMRs:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    
+    // Log all registered routes
+    console.log("Registered routes:");
+    app._router.stack.forEach(function(r){
+        if (r.route && r.route.path){
+            console.log(`${Object.keys(r.route.methods).join(', ')} ${r.route.path}`);
+        }
+    });
+});
+
+// Get specific steps from an MMR (used for displaying substeps in production process)
+app.get('/api/v1/mmr/:sku/:version/steps', authenticateToken, async (req, res) => {
+  const { sku, version } = req.params;
+  
+  try {
+    const result = await pgPool.query(`
+      SELECT * FROM MMRSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2
+      ORDER BY step_number
+    `, [sku, version]);
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching MMR steps:', error);
+    res.status(500).json({ error: 'Failed to fetch MMR steps' });
+  }
+});
+
+// Get substeps for a specific main step in an MMR
+app.get('/api/v1/mmr/:sku/:version/substeps/:stepNumber', authenticateToken, async (req, res) => {
+  const { sku, version, stepNumber } = req.params;
+  
+  try {
+    console.log(`Fetching substeps for MMR ${sku}/${version}, step ${stepNumber}`);
+    
+    // First check if the MMR exists
+    const mmrCheck = await pgPool.query(`
+      SELECT COUNT(*) FROM MMRs 
+      WHERE product_sku = $1 AND version = $2
+    `, [sku, version]);
+    
+    if (mmrCheck.rows[0].count === '0') {
+      console.log(`MMR not found: ${sku}/${version}`);
+      return res.status(404).json({ error: 'MMR not found', message: 'No MMR record exists for this product.' });
+    }
+    
+    // Check if the step exists
+    const stepCheck = await pgPool.query(`
+      SELECT COUNT(*) FROM MMRSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2 AND step_number = $3
+    `, [sku, version, stepNumber]);
+    
+    if (stepCheck.rows[0].count === '0') {
+      console.log(`Step ${stepNumber} not found in MMR ${sku}/${version}`);
+      return res.status(404).json({ error: 'Step not found', message: `Step ${stepNumber} does not exist in this MMR.` });
+    }
+    
+    // Query for the substeps
+    const result = await pgPool.query(`
+      SELECT * FROM MMRSubSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+      ORDER BY sub_step_number
+    `, [sku, version, stepNumber]);
+    
+    console.log(`Found ${result.rows.length} substeps for MMR ${sku}/${version}, step ${stepNumber}`);
+    
+    // Even if we find 0 substeps, return a 200 status with an empty array
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching MMR substeps:', error);
+    res.status(500).json({ error: 'Failed to fetch MMR substeps' });
+  }
+});
+
+// Debug endpoint to check and create test substeps
+app.get('/api/debug/create-test-substeps/:sku/:version/:stepNumber', async (req, res) => {
+  const { sku, version, stepNumber } = req.params;
+  
+  try {
+    // First check if the MMR exists
+    const mmrCheck = await pgPool.query(`
+      SELECT COUNT(*) FROM MMRs 
+      WHERE product_sku = $1 AND version = $2
+    `, [sku, version]);
+    
+    if (mmrCheck.rows[0].count === '0') {
+      return res.status(404).json({ error: 'MMR not found', message: 'No MMR record exists for this product.' });
+    }
+    
+    // Check if the step exists
+    const stepCheck = await pgPool.query(`
+      SELECT COUNT(*) FROM MMRSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2 AND step_number = $3
+    `, [sku, version, stepNumber]);
+    
+    if (stepCheck.rows[0].count === '0') {
+      return res.status(404).json({ error: 'Step not found', message: `Step ${stepNumber} does not exist in this MMR.` });
+    }
+    
+    // Check if substeps already exist
+    const substepsCheck = await pgPool.query(`
+      SELECT COUNT(*) FROM MMRSubSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+    `, [sku, version, stepNumber]);
+    
+    const substepsCount = parseInt(substepsCheck.rows[0].count);
+    console.log(`Found ${substepsCount} substeps for MMR ${sku}/${version}, step ${stepNumber}`);
+    
+    // If no substeps exist, create test substeps
+    if (substepsCount === 0) {
+      // Begin transaction
+      await pgPool.query('BEGIN');
+      
+      // Create 3 test substeps
+      await pgPool.query(`
+        INSERT INTO MMRSubSteps (mmr_product_sku, mmr_version, main_step_number, sub_step_number, description, step_type)
+        VALUES 
+          ($1, $2, $3, '1.1', 'First substep: Prepare the equipment', 'sub'),
+          ($1, $2, $3, '1.2', 'Second substep: Begin the process', 'sub'),
+          ($1, $2, $3, '1.3', 'Quality check: Verify proper execution', 'qc')
+      `, [sku, version, stepNumber]);
+      
+      // Commit the transaction
+      await pgPool.query('COMMIT');
+      
+      console.log(`Created 3 test substeps for MMR ${sku}/${version}, step ${stepNumber}`);
+      
+      // Fetch the created substeps
+      const createdSubsteps = await pgPool.query(`
+        SELECT * FROM MMRSubSteps
+        WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+        ORDER BY sub_step_number
+      `, [sku, version, stepNumber]);
+      
+      return res.json({
+        message: 'Created test substeps',
+        substeps: createdSubsteps.rows
+      });
+    }
+    
+    // If substeps already exist, just return them
+    const existingSubsteps = await pgPool.query(`
+      SELECT * FROM MMRSubSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2 AND main_step_number = $3
+      ORDER BY sub_step_number
+    `, [sku, version, stepNumber]);
+    
+    return res.json({
+      message: 'Existing substeps found',
+      substeps: existingSubsteps.rows
+    });
+    
+  } catch (error) {
+    console.error('Error in debug substeps endpoint:', error);
+    
+    // If there was an error during transaction, rollback
+    try {
+      await pgPool.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Error during rollback:', rollbackError);
+    }
+    
+    return res.status(500).json({ 
+      error: 'Failed to check/create substeps',
+      details: error.message,
+      stack: error.stack
+    });
+    }
+});
+
+// Debug endpoint to force-update production steps
+app.get('/api/debug/production-orders/:id/update-steps', async (req, res) => {
+  const orderId = req.params.id;
+  
+  try {
+    console.log(`Force-updating steps for production order ${orderId}`);
+    
+    // First get the production order details
+    const orderResult = await pgPool.query(`
+      SELECT po.*, m.base_quantity 
+      FROM ProductionOrders po
+      LEFT JOIN MMRs m ON po.mmr_product_sku = m.product_sku AND po.mmr_version = m.version
+      WHERE po.id = $1
+    `, [orderId]);
+    
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Production order not found' });
+    }
+    
+    const order = orderResult.rows[0];
+    console.log(`Found production order: ${JSON.stringify(order)}`);
+    
+    // Calculate scaling factor
+    const baseQuantity = parseFloat(order.base_quantity) || 100;
+    const scalingFactor = order.quantity / baseQuantity;
+    console.log(`Scaling factor: ${scalingFactor} (${order.quantity} / ${baseQuantity})`);
+    
+    // Get MMR ingredients
+    const ingredientsResult = await pgPool.query(`
+      SELECT mi.*, ii.name as ingredient_name
+      FROM MMRIngredients mi
+      LEFT JOIN InventoryItems ii ON mi.ingredient_sku = ii.sku
+      WHERE mi.mmr_product_sku = $1 AND mi.mmr_version = $2
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    console.log(`Found ${ingredientsResult.rows.length} ingredients from MMR`);
+    
+    // Get MMR equipment
+    const equipmentResult = await pgPool.query(`
+      SELECT *
+      FROM MMREquipment
+      WHERE mmr_product_sku = $1 AND mmr_version = $2
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    console.log(`Found ${equipmentResult.rows.length} equipment items from MMR`);
+    
+    // Get MMR steps and substeps
+    const mmrStepsResult = await pgPool.query(`
+      SELECT *
+      FROM MMRSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2
+      ORDER BY step_number
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    console.log(`Found ${mmrStepsResult.rows.length} steps from MMR`);
+    
+    const substepsResult = await pgPool.query(`
+      SELECT * FROM MMRSubSteps
+      WHERE mmr_product_sku = $1 AND mmr_version = $2
+      ORDER BY main_step_number, sub_step_number
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    console.log(`Found ${substepsResult.rows.length} substeps from MMR`);
+    
+    // Get packaging and labels info
+    const packagingResult = await pgPool.query(`
+      SELECT mp.*, ii.name as packaging_name
+      FROM MMRPackaging mp
+      LEFT JOIN InventoryItems ii ON mp.packaging_sku = ii.sku
+      WHERE mp.mmr_product_sku = $1 AND mp.mmr_version = $2
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    const labelsResult = await pgPool.query(`
+      SELECT ml.*, ii.name as label_name
+      FROM MMRLabels ml
+      LEFT JOIN InventoryItems ii ON ml.label_sku = ii.sku
+      WHERE ml.mmr_product_sku = $1 AND ml.mmr_version = $2
+    `, [order.mmr_product_sku, order.mmr_version]);
+    
+    // Get existing steps
+    const stepsResult = await pgPool.query(`
+      SELECT *
+      FROM ProductionSteps
+      WHERE production_order_id = $1
+      ORDER BY step_number
+    `, [orderId]);
+    
+    if (stepsResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No steps found for this production order' });
+    }
+    
+    // Start transaction to update steps
+    await pgPool.query('BEGIN');
+    
+    try {
+      // Create a mapping of main steps to their substeps
+      const substepsByMainStep = {};
+      substepsResult.rows.forEach(substep => {
+        if (!substepsByMainStep[substep.main_step_number]) {
+          substepsByMainStep[substep.main_step_number] = [];
+        }
+        substepsByMainStep[substep.main_step_number].push(substep);
+      });
+      
+      // Update ingredients step
+      if (ingredientsResult.rows.length > 0) {
+        const ingredientList = ingredientsResult.rows.map(ing => {
+          const scaledQuantity = (parseFloat(ing.quantity) * scalingFactor).toFixed(2);
+          const itemName = ing.ingredient_name || ing.ingredient_sku;
+          return `${itemName} (${ing.ingredient_sku}): ${scaledQuantity} ${ing.unit_type}`;
+        }).join(', ');
+        
+        await pgPool.query(`
+          UPDATE ProductionSteps
+          SET description = $1
+          WHERE production_order_id = $2 AND step_number = 1
+        `, [`Gather all required ingredients: ${ingredientList}`, orderId]);
+      }
+      
+      // Update equipment step
+      if (equipmentResult.rows.length > 0) {
+        const equipmentList = equipmentResult.rows.map(eq => eq.equipment_name).join(', ');
+        
+        await pgPool.query(`
+          UPDATE ProductionSteps
+          SET description = $1
+          WHERE production_order_id = $2 AND step_number = 2
+        `, [`Prepare all required equipment: ${equipmentList}`, orderId]);
+      }
+      
+      // Update manufacturing steps with substep counts
+      for (let i = 0; i < mmrStepsResult.rows.length; i++) {
+        const step = mmrStepsResult.rows[i];
+        let stepDescription = step.description;
+        
+        // Add substeps to description if they exist
+        if (substepsByMainStep[step.step_number] && substepsByMainStep[step.step_number].length > 0) {
+          const substepCount = substepsByMainStep[step.step_number].length;
+          stepDescription += ` (${substepCount} detailed steps in MMR)`;
+        }
+        
+        // Step numbers in ProductionSteps may be offset by 2 (for ingredients and equipment)
+        await pgPool.query(`
+          UPDATE ProductionSteps
+          SET description = $1
+          WHERE production_order_id = $2 AND step_number = $3
+        `, [stepDescription, orderId, i + 3]);
+      }
+      
+      // Update packaging step
+      if (packagingResult.rows.length > 0) {
+        const packagingList = packagingResult.rows.map(pkg => {
+          const scaledQuantity = (parseFloat(pkg.quantity) * scalingFactor).toFixed(2);
+          const packageName = pkg.packaging_name || pkg.packaging_sku;
+          return `${packageName} (${pkg.packaging_sku}): ${scaledQuantity} ${pkg.unit_type}`;
+        }).join(', ');
+        
+        // Packaging step is typically one of the last steps
+        await pgPool.query(`
+          UPDATE ProductionSteps
+          SET description = $1
+          WHERE production_order_id = $2 AND step_number = $3
+        `, [`Package the finished product: ${packagingList}`, orderId, stepsResult.rows.length - 1]);
+      }
+      
+      // Update labeling step
+      if (labelsResult.rows.length > 0) {
+        const labelList = labelsResult.rows.map(label => {
+          const scaledQuantity = (parseFloat(label.quantity) * scalingFactor).toFixed(2);
+          const labelName = label.label_name || label.label_sku;
+          return `${labelName} (${label.label_sku}): ${scaledQuantity} ${label.unit_type}`;
+        }).join(', ');
+        
+        // Labeling step is typically the last step
+        await pgPool.query(`
+          UPDATE ProductionSteps
+          SET description = $1
+          WHERE production_order_id = $2 AND step_number = $3
+        `, [`Apply labels to packaged product: ${labelList}`, orderId, stepsResult.rows.length]);
+      }
+      
+      await pgPool.query('COMMIT');
+      
+      // Get the updated steps
+      const updatedStepsResult = await pgPool.query(`
+        SELECT *
+        FROM ProductionSteps
+        WHERE production_order_id = $1
+        ORDER BY step_number
+      `, [orderId]);
+      
+      return res.json({
+        message: 'Steps updated successfully',
+        steps: updatedStepsResult.rows
+      });
+    } catch (error) {
+      await pgPool.query('ROLLBACK');
+      console.error('Error updating steps:', error);
+      return res.status(500).json({ error: 'Failed to update steps', details: error.message });
+    }
+  } catch (error) {
+    console.error('Error in debug endpoint:', error);
+    res.status(500).json({ error: 'Server error', details: error.message });
+  }
+});
+
+// Test endpoint for Amazon integration
+app.get('/api/test/amazon', async (req, res) => {
+    console.log('Amazon test endpoint called');
+    try {
+        res.json({ 
+            message: 'Amazon integration is loaded correctly',
+            success: true,
+            test_data: {
+                env_variables: {
+                    AMAZON_CLIENT_ID: process.env.AMAZON_CLIENT_ID ? 'Set' : 'Not Set',
+                    AMAZON_CLIENT_SECRET: process.env.AMAZON_CLIENT_SECRET ? 'Set' : 'Not Set',
+                    AMAZON_REFRESH_TOKEN: process.env.AMAZON_REFRESH_TOKEN ? 'Set' : 'Not Set',
+                    AMAZON_US_MARKETPLACE_ID: process.env.AMAZON_US_MARKETPLACE_ID ? 'Set' : 'Not Set'
+                },
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('Error in Amazon test endpoint:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Add this after the Amazon test endpoint
+// Initialize SKU mapping table
+const skuMapping = require('./mapping');
+
+// Initialize the SKU mapping table when the app starts
+(async function() {
+    try {
+        await skuMapping.setupSkuMappingTable();
+        console.log('SKU mapping table initialized');
+    } catch (error) {
+        console.error('Error initializing SKU mapping table:', error);
+    }
+})();
+
+// SKU Mapping API endpoints
+app.get('/api/sku-mappings', authenticateToken, async (req, res) => {
+    try {
+        const { platform, search, limit = 100, offset = 0 } = req.query;
+        const mappings = await skuMapping.getAllSkuMappings(
+            platform || null, 
+            search || null,
+            parseInt(limit),
+            parseInt(offset)
+        );
+        
+        const totalCount = await skuMapping.countSkuMappings(platform || null, search || null);
+        
+        res.json({
+            mappings,
+            total: totalCount,
+            page: Math.floor(parseInt(offset) / parseInt(limit)) + 1,
+            pageSize: parseInt(limit),
+            totalPages: Math.ceil(totalCount / parseInt(limit))
+        });
+    } catch (error) {
+        console.error('Error fetching SKU mappings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/sku-mappings', authenticateToken, checkPermission('manage_sales'), async (req, res) => {
+    try {
+        const { platformSku, internalSku, platform, productName } = req.body;
+        
+        if (!platformSku || !internalSku || !platform) {
+            return res.status(400).json({ error: 'Platform SKU, internal SKU, and platform are required' });
+        }
+        
+        const success = await skuMapping.addSkuMapping(platformSku, internalSku, platform, productName);
+        
+        if (success) {
+            res.json({ success: true, message: 'SKU mapping added successfully' });
+        } else {
+            res.status(500).json({ error: 'Failed to add SKU mapping' });
+        }
+    } catch (error) {
+        console.error('Error adding SKU mapping:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/sku-mappings/:id', authenticateToken, checkPermission('manage_sales'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const success = await skuMapping.deleteSkuMapping(id);
+        
+        if (success) {
+            res.json({ success: true, message: 'SKU mapping deleted successfully' });
+        } else {
+            res.status(500).json({ error: 'Failed to delete SKU mapping' });
+        }
+    } catch (error) {
+        console.error('Error deleting SKU mapping:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/sku-mappings/bulk', authenticateToken, checkPermission('manage_sales'), async (req, res) => {
+    try {
+        const { mappings } = req.body;
+        
+        if (!Array.isArray(mappings) || mappings.length === 0) {
+            return res.status(400).json({ error: 'Mappings array is required and must not be empty' });
+        }
+        
+        const result = await skuMapping.bulkUploadSkuMappings(mappings);
+        
+        res.json({
+            success: true,
+            message: `${result.successCount} mappings imported successfully, ${result.failCount} failed`,
+            ...result
+        });
+    } catch (error) {
+        console.error('Error bulk uploading SKU mappings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/sku-mappings/suggest/:platform', authenticateToken, checkPermission('view_sales'), async (req, res) => {
+    try {
+        const { platform } = req.params;
+        const { threshold = 0.7 } = req.query;
+        
+        const suggestions = await skuMapping.suggestMappings(platform, parseFloat(threshold));
+        
+        res.json({
+            success: true,
+            suggestions,
+            count: suggestions.length
+        });
+    } catch (error) {
+        console.error('Error suggesting SKU mappings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test endpoint to add a test Amazon SKU to the mapping table
+app.get('/api/test/add-test-sku', async (req, res) => {
+    try {
+        const client = await pgPool.connect();
+        try {
+            console.log('Adding test Amazon SKU to mapping table...');
+            
+            // First, get the table structure to determine what columns we have
+            const tableInfo = await client.query(`
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'skumapping'
+            `);
+            
+            const columns = tableInfo.rows.map(row => row.column_name);
+            console.log('Available columns:', columns);
+            
+            // Insert using only basic columns that we know exist
+            await client.query(`
+                INSERT INTO SkuMapping (platform_sku, platform, internal_sku, product_name) 
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (platform_sku, platform) DO NOTHING
+            `, ['TEST-SKU-1234', 'amazon', 'TEST-INTERNAL-SKU', 'Test Product']);
+            
+            const result = await client.query('SELECT * FROM SkuMapping WHERE platform_sku = $1', ['TEST-SKU-1234']);
+            
+            res.json({
+                message: 'Test SKU added successfully',
+                sku: result.rows.length > 0 ? result.rows[0] : null,
+                availableColumns: columns
+            });
+        } catch (error) {
+            console.error('Database error:', error);
+            res.status(500).json({ error: error.message });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Server error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test endpoint to view all SKU mappings
+app.get('/api/test/sku-mappings', async (req, res) => {
+    try {
+        const { platform, limit = 100, offset = 0 } = req.query;
+        console.log(`Test endpoint: Getting SKU mappings (platform=${platform || 'all'}, limit=${limit}, offset=${offset})`);
+        
+        const mappings = await skuMapping.getAllSkuMappings(
+            platform || null,
+            null,
+            parseInt(limit),
+            parseInt(offset)
+        );
+        
+        res.json({
+            success: true,
+            mappings,
+            count: mappings.length
+        });
+    } catch (error) {
+        console.error(`Test endpoint: Error getting SKU mappings: ${error}`);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Test endpoint for Amazon sync without authentication (for debugging)
+app.post('/api/test/sync/amazon', async (req, res) => {
+    try {
+        console.log('Test: Amazon sync triggered by API');
+        const amazonIntegration = require('./amazon');
+        const result = await amazonIntegration.syncAllMarketplaces(30);
+        res.json({
+            success: true,
+            message: 'Amazon sync completed successfully',
+            result
+        });
+    } catch (error) {
+        console.error('Test: Error in Amazon sync endpoint:', error);
+        res.status(500).json({ error: 'Error syncing Amazon orders', details: error.message });
+    }
+});
+
+// Test endpoint for syncing only today's Amazon orders
+app.post('/api/test/sync/amazon/today', async (req, res) => {
+    try {
+        console.log('Test: Today-only Amazon sync triggered by API');
+        const amazonIntegration = require('./amazon');
+        const result = await amazonIntegration.syncAllMarketplaces(1); // Only 1 day back
+        res.json({
+            success: true,
+            message: 'Today-only Amazon sync completed successfully',
+            result
+        });
+    } catch (error) {
+        console.error('Test: Error in today-only Amazon sync endpoint:', error);
+        res.status(500).json({ error: 'Error syncing today\'s Amazon orders', details: error.message });
+    }
+});
+
+// Test endpoint to directly create inventory items from Amazon SKUs
+app.post('/api/test/create-amazon-inventory', async (req, res) => {
+    try {
+        console.log('Creating inventory items for Amazon SKUs...');
+        
+        // Sample Amazon SKUs
+        const amazonSkus = req.body.skus || [
+            { sku: 'AMZN-PRODUCT-1', name: 'Amazon Product 1' },
+            { sku: 'AMZN-PRODUCT-2', name: 'Amazon Product 2' },
+            { sku: 'AMZN-PRODUCT-3', name: 'Amazon Product 3' }
+        ];
+        
+        const client = await pgPool.connect();
+        const createdItems = [];
+        
+        try {
+            await client.query('BEGIN');
+            
+            for (const item of amazonSkus) {
+                // Normalize the SKU to P-prefixed format
+                const normalizedSku = item.sku.startsWith('P-') ? item.sku : `P-${item.sku}`;
+                
+                // Check if item already exists
+                const existingItem = await client.query(
+                    'SELECT * FROM InventoryItems WHERE sku = $1',
+                    [normalizedSku]
+                );
+                
+                if (existingItem.rows.length > 0) {
+                    console.log(`Item ${normalizedSku} already exists, skipping...`);
+                    createdItems.push({
+                        sku: normalizedSku,
+                        name: item.name,
+                        status: 'skipped',
+                        item: existingItem.rows[0]
+                    });
+                    continue;
+                }
+                
+                // Create new inventory item
+                const newItem = await client.query(
+                    `INSERT INTO InventoryItems 
+                    (sku, name, type, stock_level, minimum_quantity, unit_type, sellable)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING *`,
+                    [
+                        normalizedSku,
+                        item.name || `Amazon Product (${normalizedSku})`,
+                        'finished good',
+                        item.stock_level || 0,
+                        item.minimum_quantity || 0,
+                        item.unit_type || 'units',
+                        true
+                    ]
+                );
+                
+                console.log(`Created inventory item for ${normalizedSku}`);
+                createdItems.push({
+                    sku: normalizedSku,
+                    name: item.name,
+                    status: 'created',
+                    item: newItem.rows[0]
+                });
+            }
+        try {
+            // First check which SKUs already exist
+            const existingResult = await client.query(`
+                SELECT platform_sku FROM SkuMapping 
+                WHERE platform = 'amazon' AND platform_sku LIKE 'AMZN-SKU-%'
+            `);
+            const existingSkus = new Set(existingResult.rows.map(row => row.platform_sku));
+            
+            // Filter out the SKUs that already exist
+            const newSkus = testSkus.filter(sku => !existingSkus.has(sku));
+            
+            if (newSkus.length > 0) {
+                // Insert new SKUs with batch insert
+                const values = [];
+                const valueStrings = [];
+                
+                newSkus.forEach((sku, index) => {
+                    // Extract a possible product name from the SKU
+                    let productName = null;
+                    if (sku.includes('WIDGET')) {
+                        const size = sku.split('-').pop();
+                        productName = `Sample Widget ${size} Size`;
+                    } else if (sku.includes('GADGET')) {
+                        const color = sku.split('-').pop();
+                        productName = `Sample Gadget ${color} Color`;
+                    } else {
+                        productName = `Sample Product ${index + 1}`;
+                    }
+                    
+                    values.push('amazon', sku, null, productName, 0, 'unmapped');
+                    valueStrings.push(`($${index * 6 + 1}, $${index * 6 + 2}, $${index * 6 + 3}, $${index * 6 + 4}, $${index * 6 + 5}, $${index * 6 + 6})`);
+                });
+                
+                const insertQuery = `
+                    INSERT INTO SkuMapping 
+                    (platform, platform_sku, internal_sku, product_name, confidence, status) 
+                    VALUES ${valueStrings.join(',')}
+                    ON CONFLICT (platform_sku, platform) DO NOTHING
+                `;
+                
+                await client.query(insertQuery, values);
+                console.log(`Added ${newSkus.length} new test Amazon SKUs to mapping table`);
+                
+                res.json({ 
+                    message: 'Successfully imported test Amazon SKUs',
+                    added: newSkus.length,
+                    skus: newSkus
+                });
+            } else {
+                res.json({ 
+                    message: 'All test SKUs already exist in mapping table',
+                    added: 0 
+                });
+            }
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error(`Error importing test Amazon SKUs: ${error.message}`);
+        res.status(500).json({ error: error.message });
+    }
+
+// API endpoint to test adding a single SKU
+app.get('/api/test/add-test-sku', async (req, res) => {
+    try {
+        const client = await pgPool.connect();
+        try {
+            console.log('Adding test Amazon SKU to mapping table...');
+            
+            // First, get the table structure to determine what columns we have
+            const tableInfo = await client.query(`
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'skumapping'
+            `);
+            
+            const columns = tableInfo.rows.map(row => row.column_name);
+            console.log('Available columns:', columns);
+            
+            // Insert using only basic columns that we know exist
+            await client.query(`
+                INSERT INTO SkuMapping (platform_sku, platform, internal_sku, product_name) 
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (platform_sku, platform) DO NOTHING
+            `, ['TEST-SKU-1234', 'amazon', 'TEST-INTERNAL-SKU', 'Test Product']);
+            
+            const result = await client.query('SELECT * FROM SkuMapping WHERE platform_sku = $1', ['TEST-SKU-1234']);
+            
+            res.json({
+                message: 'Test SKU added successfully',
+                sku: result.rows.length > 0 ? result.rows[0] : null,
+                availableColumns: columns
+            });
+        } catch (error) {
+            console.error('Database error:', error);
+            res.status(500).json({ error: error.message });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Server error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add a test endpoint to view SKU mappings without authentication
+app.get('/api/test/sku-mappings', async (req, res) => {
+    try {
+        const platform = req.query.platform || null;
+        const searchTerm = req.query.search || null;
+        const limit = parseInt(req.query.limit || '100');
+        const offset = parseInt(req.query.offset || '0');
+        
+        console.log(`Test endpoint: Getting ${limit} SKU mappings for platform ${platform || 'all'}`);
+        
+        const mappings = await skuMapping.getAllSkuMappings(platform, searchTerm, limit, offset);
+        const total = await skuMapping.countSkuMappings(platform, searchTerm);
+        
+        res.json({
+            mappings,
+            total,
+            limit,
+            offset,
+            platform
+        });
+    } catch (error) {
+        console.error(`Error getting SKU mappings: ${error.message}`);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add a test endpoint to import sample Shopify SKUs
+app.get('/api/test/import-shopify-skus', async (req, res) => {
+    try {
+        console.log('Test endpoint: Importing sample Shopify SKUs...');
+        
+        // Sample Shopify SKUs for testing
+        const testSkus = [
+            'SHOPIFY-SKU-001', 'SHOPIFY-SKU-002', 'SHOPIFY-SKU-003', 'SHOPIFY-SKU-004', 'SHOPIFY-SKU-005',
+            'SHOPIFY-SKU-006', 'SHOPIFY-SKU-007', 'SHOPIFY-SKU-008', 'SHOPIFY-SKU-009', 'SHOPIFY-SKU-010',
+            'SHOPIFY-SKU-WIDGET-S', 'SHOPIFY-SKU-WIDGET-M', 'SHOPIFY-SKU-WIDGET-L',
+            'SHOPIFY-SKU-GADGET-RED', 'SHOPIFY-SKU-GADGET-BLUE', 'SHOPIFY-SKU-GADGET-GREEN'
+        ];
+        
+        const client = await pgPool.connect();
+        try {
+            // First check which SKUs already exist
+            const existingResult = await client.query(`
+                SELECT platform_sku FROM SkuMapping 
+                WHERE platform = 'shopify' AND platform_sku LIKE 'SHOPIFY-SKU-%'
+            `);
+            const existingSkus = new Set(existingResult.rows.map(row => row.platform_sku));
+            
+            // Filter out the SKUs that already exist
+            const newSkus = testSkus.filter(sku => !existingSkus.has(sku));
+            
+            if (newSkus.length > 0) {
+                // Insert new SKUs with batch insert
+                const values = [];
+                const valueStrings = [];
+                
+                newSkus.forEach((sku, index) => {
+                    // Extract a possible product name from the SKU
+                    let productName = null;
+                    if (sku.includes('WIDGET')) {
+                        const size = sku.split('-').pop();
+                        productName = `Shopify Widget ${size} Size`;
+                    } else if (sku.includes('GADGET')) {
+                        const color = sku.split('-').pop();
+                        productName = `Shopify Gadget ${color} Color`;
+                    } else {
+                        productName = `Shopify Product ${index + 1}`;
+                    }
+                    
+                    values.push('shopify', sku, null, productName, 0, 'unmapped');
+                    valueStrings.push(`($${index * 6 + 1}, $${index * 6 + 2}, $${index * 6 + 3}, $${index * 6 + 4}, $${index * 6 + 5}, $${index * 6 + 6})`);
+                });
+                
+                const insertQuery = `
+                    INSERT INTO SkuMapping 
+                    (platform, platform_sku, internal_sku, product_name, confidence, status) 
+                    VALUES ${valueStrings.join(',')}
+                    ON CONFLICT (platform_sku, platform) DO NOTHING
+                `;
+                
+                await client.query(insertQuery, values);
+                console.log(`Added ${newSkus.length} new test Shopify SKUs to mapping table`);
+                
+                res.json({ 
+                    message: 'Successfully imported test Shopify SKUs',
+                    added: newSkus.length,
+                    skus: newSkus
+                });
+            } else {
+                res.json({ 
+                    message: 'All test Shopify SKUs already exist in mapping table',
+                    added: 0 
+                });
+            }
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error(`Error importing test Shopify SKUs: ${error.message}`);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add an endpoint to trigger real SKU syncs without authentication
+app.post('/api/test/sync-skus', async (req, res) => {
+    try {
+        console.log('Test endpoint: Syncing SKUs from both Amazon and Shopify');
+        
+        // Sync Shopify first
+        try {
+            console.log('Starting Shopify sync...');
+            await salesSyncService.syncShopify();
+            console.log('Shopify sync completed');
+        } catch (shopifyError) {
+            console.error('Shopify sync error:', shopifyError);
+        }
+        
+        // Then sync Amazon
+        try {
+            console.log('Starting Amazon sync...');
+            await salesSyncService.syncAmazon();
+            console.log('Amazon sync completed');
+        } catch (amazonError) {
+            console.error('Amazon sync error:', amazonError);
+        }
+        
+        // Get current count of SKUs by platform
+        const client = await pgPool.connect();
+        try {
+            const amazonResult = await client.query("SELECT COUNT(*) FROM SkuMapping WHERE platform = 'amazon'");
+            const shopifyResult = await client.query("SELECT COUNT(*) FROM SkuMapping WHERE platform = 'shopify'");
+            
+            const amazonCount = parseInt(amazonResult.rows[0].count);
+            const shopifyCount = parseInt(shopifyResult.rows[0].count);
+            
+            res.json({
+                success: true,
+                message: 'Sync process completed',
+                skuCounts: {
+                    amazon: amazonCount,
+                    shopify: shopifyCount,
+                    total: amazonCount + shopifyCount
+                }
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error in sync process:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add an endpoint to trigger imports of all SKUs for both platforms
+app.post('/api/sku-mappings/import-all', authenticateToken, async (req, res) => {
+    try {
+        console.log('Starting import of all SKUs for both platforms...');
+        const results = { amazon: null, shopify: null };
+        
+        // Start Amazon import
+        try {
+            console.log('Importing Amazon SKUs...');
+            // Get Amazon orders from the last 90 days to extract SKUs
+            const amazonData = await amazonIntegration.syncOrdersByChunks('US', 90, 10);
+            console.log(`Amazon import completed, found ${amazonData.length} orders`);
+            results.amazon = { status: 'success', ordersProcessed: amazonData.length };
+        } catch (amazonError) {
+            console.error('Error importing Amazon SKUs:', amazonError);
+            results.amazon = { status: 'error', message: amazonError.message };
+        }
+        
+        // Start Shopify import
+        try {
+            console.log('Importing Shopify SKUs...');
+            const shopifyResults = await shopifyIntegration.syncAllStores(90);
+            console.log('Shopify import completed:', shopifyResults);
+            results.shopify = { status: 'success', results: shopifyResults };
+        } catch (shopifyError) {
+            console.error('Error importing Shopify SKUs:', shopifyError);
+            results.shopify = { status: 'error', message: shopifyError.message };
+        }
+        
+        res.json({
+            success: true,
+            message: 'SKU import completed',
+            results
+        });
+    } catch (error) {
+        console.error('Error importing SKUs:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error importing SKUs',
+            error: error.message
+        });
+    }
+});
+
+// Test endpoint to create a sample Amazon order
+app.get('/api/test/create-amazon-order', async (req, res) => {
+    try {
+        console.log('Creating sample Amazon order for testing...');
+        
+        const amazonIntegration = require('./amazon');
+        
+        // Create a sample Amazon order
+        const sampleOrder = {
+            AmazonOrderId: 'TEST-AMAZON-ORDER-' + Date.now(),
+            OrderStatus: 'Shipped',
+            PurchaseDate: new Date().toISOString(),
+            BuyerInfo: {
+                BuyerEmail: 'test@example.com'
+            },
+            OrderTotal: {
+                Amount: '49.99',
+                CurrencyCode: 'USD'
+            },
+            OrderItems: [
+                {
+                    OrderItemId: 'TEST-ITEM-1',
+                    SellerSKU: 'AMZN-TEST-SKU-1',
+                    Title: 'Test Amazon Product 1',
+                    QuantityOrdered: '1',
+                    ItemPrice: {
+                        Amount: '19.99',
+                        CurrencyCode: 'USD'
+                    },
+                    ASIN: 'B00TEST1234'
+                },
+                {
+                    OrderItemId: 'TEST-ITEM-2',
+                    SellerSKU: 'AMZN-TEST-SKU-2',
+                    Title: 'Test Amazon Product 2',
+                    QuantityOrdered: '2',
+                    ItemPrice: {
+                        Amount: '29.99',
+                        CurrencyCode: 'USD'
+                    },
+                    ASIN: 'B00TEST5678'
+                }
+            ]
+        };
+        
+        // Process the sample order
+        await amazonIntegration.processOrders([sampleOrder], 'US');
+        
+        // Check if the inventory items were created
+        const client = await pgPool.connect();
+        try {
+            const result = await client.query(
+                `SELECT * FROM InventoryItems 
+                WHERE name LIKE '%Test Amazon Product%'
+                ORDER BY created_at DESC`
+            );
+            
+            const orderResult = await client.query(
+                `SELECT * FROM SalesOrders 
+                WHERE platform_order_id = $1`,
+                [sampleOrder.AmazonOrderId]
+            );
+            
+            res.json({
+                success: true,
+                message: 'Sample Amazon order processed successfully',
+                order_id: sampleOrder.AmazonOrderId,
+                sales_order: orderResult.rows[0] || null,
+                inventory_items: result.rows
+            });
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error('Error creating sample Amazon order:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            stack: error.stack
+        });
+    }
+});

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Final Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 5px; }
+        button { padding: 10px; margin: 10px 0; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Direct API Test</h1>
+    
+    <div>
+        <button id="testButton">Test Production Orders API</button>
+    </div>
+    
+    <div>
+        <h3>Token Information:</h3>
+        <pre id="tokenInfo">Checking...</pre>
+    </div>
+    
+    <div>
+        <h3>API Response:</h3>
+        <pre id="apiResponse">Click the button to test</pre>
+    </div>
+
+    <script>
+        // Extremely simple script
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check token
+            const token = localStorage.getItem('token');
+            const tokenInfo = document.getElementById('tokenInfo');
+            if (token) {
+                tokenInfo.textContent = 'Token found: ' + token.substring(0, 20) + '...';
+            } else {
+                tokenInfo.textContent = 'No token found in localStorage!';
+            }
+            
+            // Set up test button
+            document.getElementById('testButton').addEventListener('click', async function() {
+                const apiResponse = document.getElementById('apiResponse');
+                apiResponse.textContent = 'Testing API...';
+                
+                try {
+                    console.log('Direct Fetch Test: Starting API call');
+                    const response = await fetch('/api/v1/production-orders', {
+                        headers: {
+                            'Authorization': 'Bearer ' + localStorage.getItem('token')
+                        }
+                    });
+                    
+                    console.log('Direct Fetch Test: Got response', response.status);
+                    
+                    if (!response.ok) {
+                        throw new Error(`API error: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log('Direct Fetch Test: Got data', data.length);
+                    
+                    apiResponse.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    console.error('Direct Fetch Test: Error', error);
+                    apiResponse.textContent = 'ERROR: ' + error.message;
+                }
+            });
+        });
+    </script>
+    
+    <div style="margin-top: 20px;">
+        <a href="/production-process.html?bypass=true">Try Production Process (bypass)</a> |
+        <a href="/test-page.html">Go to Test Page</a> |
+        <button onclick="localStorage.clear(); alert('Token cleared!'); window.location.href='/login.html';">Clear Token & Login</button>
+    </div>
+</body>
+</html> 

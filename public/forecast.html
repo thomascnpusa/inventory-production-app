@@ -1,0 +1,1370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory & Production Forecast</title>
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <!-- Add Chart.js for visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .sortable {
+            cursor: pointer;
+        }
+        .sortable:hover {
+            background-color: rgba(0,0,0,0.05);
+        }
+        .sort-icon {
+            display: inline-block;
+            width: 1em;
+        }
+        .pagination-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .search-container {
+            margin-bottom: 20px;
+        }
+        /* Cursor style for rows to indicate they're clickable */
+        #combinedTableBody tr {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        #combinedTableBody tr:hover {
+            background-color: rgba(0,0,0,0.05);
+        }
+        /* Add visible indicator that rows are clickable */
+        #combinedTableBody tr td:first-child {
+            position: relative;
+        }
+        #combinedTableBody tr td:first-child::before {
+            content: "";
+            font-family: "Bootstrap Icons";
+            position: absolute;
+            left: -5px;
+            opacity: 0;
+            transition: opacity 0.2s, left 0.2s;
+        }
+        #combinedTableBody tr:hover td:first-child::before {
+            opacity: 1;
+            left: -15px;
+        }
+        /* Chart containers */
+        .chart-container {
+            position: relative;
+            height: 250px;
+            margin-bottom: 20px;
+        }
+        /* Modern card styles for product details */
+        .product-detail-card {
+            border-radius: 10px;
+            border: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+        .product-detail-card .card-body {
+            padding: 20px;
+        }
+        .product-detail-card .card-title {
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #6c757d;
+        }
+        /* Table text size */
+        .table {
+            font-size: 12px;
+        }
+        /* Making the table more compact */
+        .table td, .table th {
+            padding: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/forecast.html">Forecast</a></li>
+                    <li class="nav-item admin-only" style="display: none;">
+                        <a class="nav-link" href="/admin.html">Admin</a>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row mb-4">
+            <div class="col-12">
+                <h1 class="mb-3">Sales & Production Forecast</h1>
+                <p class="text-muted">This page shows 30-day forecasts based on historical sales data.</p>
+                
+                <div class="d-flex justify-content-end mb-3">
+                    <button id="refreshBtn" class="btn btn-primary">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Forecast
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card mb-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="card-title mb-0">Combined Forecast & Production Plan</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Search Bar -->
+                        <div class="search-container row">
+                            <div class="col-md-6">
+                                <div class="input-group mb-3">
+                                    <input type="text" id="searchInput" class="form-control" placeholder="Search by SKU or name...">
+                                    <button class="btn btn-outline-secondary" type="button" id="searchBtn">
+                                        <i class="bi bi-search"></i> Search
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <select id="sortSelect" class="form-select">
+                                    <option value="forecast-desc">30-Day Forecast (High to Low)</option>
+                                    <option value="forecast-asc">30-Day Forecast (Low to High)</option>
+                                    <option value="sku-asc">SKU (A to Z)</option>
+                                    <option value="sku-desc">SKU (Z to A)</option>
+                                    <option value="name-asc">Name (A to Z)</option>
+                                    <option value="name-desc">Name (Z to A)</option>
+                                    <option value="stock-desc">Current Stock (High to Low)</option>
+                                    <option value="stock-asc">Current Stock (Low to High)</option>
+                                    <option value="duedate-asc">Due Date (Earliest First)</option>
+                                    <option value="duedate-desc">Due Date (Latest First)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <select id="itemsPerPage" class="form-select">
+                                    <option value="20">20 items per page</option>
+                                    <option value="50">50 items per page</option>
+                                    <option value="100">100 items per page</option>
+                                    <option value="all">Show all</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div id="forecastLoading" class="text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading forecast data...</p>
+                        </div>
+                        <div id="forecastContent" style="display: none;">
+                            <div class="table-responsive">
+                                <table class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th class="sortable" data-sort="sku">Product SKU <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="name">Product Name <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="stock">Current Stock <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast30">30-Day Forecast <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast60">60-Day Forecast <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast90">90-Day Forecast <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="production">Production Units <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="duedate">Production Due Date <span class="sort-icon"></span></th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="combinedTableBody">
+                                        <!-- Combined forecast and production data will be populated here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <!-- Pagination Controls -->
+                            <nav aria-label="Forecast pagination" class="pagination-container">
+                                <ul class="pagination" id="paginationContainer">
+                                    <!-- Pagination will be populated here -->
+                                </ul>
+                            </nav>
+                            
+                            <!-- Hint text for clickable rows -->
+                            <div class="text-muted text-center mt-3 p-2" style="background-color: #f8f9fa; border-radius: 8px;">
+                                <i class="bi bi-info-circle-fill text-primary"></i> 
+                                <span style="font-size: 0.9rem;">Click on any product row to view detailed sales analytics and charts</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Material Reorders -->
+            <div class="col-md-12">
+                <div class="card mb-4">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="card-title mb-0">Material Reorder Suggestions</h5>
+                    </div>
+                    <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                        <div id="reordersLoading" class="text-center">
+                            <div class="spinner-border text-warning" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading reorder suggestions...</p>
+                        </div>
+                        <div id="reordersContent" style="display: none;">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Material SKU</th>
+                                        <th>Material Name</th>
+                                        <th>Current Stock</th>
+                                        <th>Required Quantity</th>
+                                        <th>Order By</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="reordersTableBody">
+                                    <!-- Reorder suggestions will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Production Order Modal -->
+            <div class="modal fade" id="createProductionModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Create Production Order</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="productionForm">
+                                <div class="mb-3">
+                                    <label for="productSku" class="form-label">Product SKU</label>
+                                    <input type="text" class="form-control" id="productSku" readonly>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="quantity" class="form-label">Quantity</label>
+                                    <input type="number" class="form-control" id="quantity" min="1">
+                                </div>
+                                <div class="mb-3">
+                                    <label for="dueDate" class="form-label">Due Date</label>
+                                    <input type="date" class="form-control" id="dueDate">
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="createProductionBtn">Create Order</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- Product Details Modal with Charts -->
+    <div class="modal fade" id="productDetailsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="productDetailsTitle">Product Sales Analysis</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <div class="product-detail-card card">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">Current Stock</div>
+                                    <div class="stat-value" id="detailStock">0</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="product-detail-card card">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">30-Day Forecast</div>
+                                    <div class="stat-value" id="detail30Forecast">0</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="product-detail-card card">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">Production Units</div>
+                                    <div class="stat-value" id="detailProduction">0</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="product-detail-card card">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">Production Due Date</div>
+                                    <div class="stat-value" id="detailDueDate">N/A</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-8">
+                            <!-- Sales Trend Chart -->
+                            <div class="product-detail-card card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Sales Trend (90 Days)</h5>
+                                    <div class="chart-container">
+                                        <canvas id="salesTrendChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <!-- Forecast Comparison Chart -->
+                            <div class="product-detail-card card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Forecast Comparison</h5>
+                                    <div class="chart-container">
+                                        <canvas id="forecastComparisonChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mt-4">
+                        <div class="col-md-6">
+                            <!-- Stock vs. Forecast Chart -->
+                            <div class="product-detail-card card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Stock vs. Forecast</h5>
+                                    <div class="chart-container">
+                                        <canvas id="stockForecastChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <!-- Production Timeline -->
+                            <div class="product-detail-card card">
+                                <div class="card-body">
+                                    <h5 class="card-title">Production Planning</h5>
+                                    <div class="chart-container">
+                                        <canvas id="productionTimelineChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" id="createOrderFromDetail">Create Production Order</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/auth.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Ensure navbar links visibility is setup correctly
+            if (typeof setupPage === 'function') {
+                setupPage();
+            }
+            
+            loadForecastData();
+
+            // Event listeners
+            document.getElementById('refreshBtn').addEventListener('click', loadForecastData);
+            document.getElementById('createProductionBtn').addEventListener('click', createProductionOrder);
+            document.getElementById('searchBtn').addEventListener('click', applyFiltersAndSort);
+            document.getElementById('searchInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    applyFiltersAndSort();
+                }
+            });
+            document.getElementById('sortSelect').addEventListener('change', applyFiltersAndSort);
+            document.getElementById('itemsPerPage').addEventListener('change', applyFiltersAndSort);
+            
+            // Add event listeners to sortable headers
+            document.querySelectorAll('.sortable').forEach(header => {
+                header.addEventListener('click', function() {
+                    const sort = this.getAttribute('data-sort');
+                    const currentSort = document.querySelector('#sortSelect').value;
+                    const isAsc = currentSort.endsWith('-asc');
+                    
+                    let newSort;
+                    if (currentSort.startsWith(sort)) {
+                        // Toggle direction
+                        newSort = sort + (isAsc ? '-desc' : '-asc');
+                    } else {
+                        // New column, default to descending
+                        newSort = sort + '-desc';
+                    }
+                    
+                    document.querySelector('#sortSelect').value = newSort;
+                    applyFiltersAndSort();
+                });
+            });
+            
+            // Add event handler for modal hidden to clean up charts
+            const productDetailsModal = document.getElementById('productDetailsModal');
+            productDetailsModal.addEventListener('hidden.bs.modal', function() {
+                cleanupCharts();
+                
+                // Ensure the modal is properly hidden and removed
+                setTimeout(() => {
+                    // Additional check for any lingering backdrops
+                    if (document.querySelector('.modal-backdrop')) {
+                        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+                        document.body.classList.remove('modal-open');
+                        document.body.style.overflow = '';
+                        document.body.style.paddingRight = '';
+                    }
+                }, 300);
+            });
+        });
+
+        // Global variables for pagination
+        let allForecasts = [];
+        let filteredForecasts = [];
+        let currentPage = 1;
+        let itemsPerPage = 20;
+        
+        async function loadForecastData() {
+            try {
+                document.getElementById('forecastLoading').style.display = 'block';
+                document.getElementById('forecastContent').style.display = 'none';
+                document.getElementById('reordersLoading').style.display = 'block';
+                document.getElementById('reordersContent').style.display = 'none';
+                
+                const response = await authenticatedFetch('/api/forecast', {
+                    method: 'POST'
+                });
+                
+                if (!response) {
+                    throw new Error('Failed to fetch forecast data');
+                }
+                
+                const data = await response.json();
+                
+                // Display forecast and production data in a combined table
+                document.getElementById('forecastLoading').style.display = 'none';
+                document.getElementById('forecastContent').style.display = 'block';
+                
+                // Process forecast data
+                allForecasts = Object.entries(data.forecast).map(([sku, info]) => {
+                    // Log to debug the product names and stock levels
+                    console.log(`Processing forecast item: ${sku}, name: "${info.product_name}", current_stock: ${info.current_stock}`);
+                    
+                    return {
+                        sku,
+                        name: info.product_name || `Product ${sku}`,
+                        forecast: Number(info.units),
+                        forecast_30d: Number(info.forecast_30d),
+                        forecast_60d: Number(info.forecast_60d),
+                        forecast_90d: Number(info.forecast_90d),
+                        current_stock: Number(info.current_stock || 0)
+                    };
+                });
+                
+                // Create a map of production data
+                const productionMap = {};
+                data.production.forEach(plan => {
+                    // Debug log to check the production data
+                    console.log(`Production item: ${plan.product_id}, name from API: "${plan.product_name}"`);
+                    productionMap[plan.product_id] = plan;
+                });
+                
+                // Store production data with each forecast item
+                allForecasts.forEach(item => {
+                    item.production = productionMap[item.sku] || null;
+                    item.production_units = item.production ? item.production.units : 0;
+                    
+                    // Calculate suggested production due date
+                    const daysOfStockRemaining = item.current_stock / (item.forecast_30d / 30); // How many days current stock will last
+                    let suggestedDate = new Date();
+                    
+                    if (daysOfStockRemaining > 30) {
+                        // If we have more than a month of stock, suggest production in 2 weeks
+                        suggestedDate.setDate(suggestedDate.getDate() + 14);
+                    } else if (daysOfStockRemaining > 14) {
+                        // If we have 2-4 weeks of stock, suggest production next week
+                        suggestedDate.setDate(suggestedDate.getDate() + 7);
+                    } else if (daysOfStockRemaining > 7) {
+                        // If we have 1-2 weeks of stock, suggest production in 3 days
+                        suggestedDate.setDate(suggestedDate.getDate() + 3);
+                    } else {
+                        // If we have less than a week of stock, suggest immediate production
+                        suggestedDate.setDate(suggestedDate.getDate() + 1);
+                    }
+                    
+                    // Only set a due date if production is needed
+                    item.suggested_due_date = item.production ? 
+                        suggestedDate.toISOString().split('T')[0] : null;
+                });
+                
+                // Initial sort by forecast (high to low)
+                allForecasts.sort((a, b) => b.forecast_30d - a.forecast_30d);
+                
+                // Apply filters and pagination
+                applyFiltersAndSort();
+                
+                // Populate reorders table
+                document.getElementById('reordersLoading').style.display = 'none';
+                document.getElementById('reordersContent').style.display = 'block';
+                
+                const reordersTableBody = document.getElementById('reordersTableBody');
+                reordersTableBody.innerHTML = '';
+                
+                if (data.reorders.length === 0) {
+                    reordersTableBody.innerHTML = '<tr><td colspan="5" class="text-center">No material reorders needed</td></tr>';
+                } else {
+                    data.reorders.forEach(reorder => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${reorder.material}</td>
+                            <td>${reorder.material_name || reorder.material}</td>
+                            <td>${reorder.current_stock || 0}</td>
+                            <td>${reorder.quantity}</td>
+                            <td>${reorder.order_by}</td>
+                        `;
+                        reordersTableBody.appendChild(row);
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading forecast data:', error);
+                alert('Failed to load forecast. Check the console for details.');
+                
+                // Hide loading indicators
+                document.getElementById('forecastLoading').style.display = 'none';
+                document.getElementById('reordersLoading').style.display = 'none';
+            }
+        }
+        
+        function applyFiltersAndSort() {
+            // Get filter values
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const sortValue = document.getElementById('sortSelect').value;
+            const perPageValue = document.getElementById('itemsPerPage').value;
+            
+            // Set items per page
+            itemsPerPage = perPageValue === 'all' ? allForecasts.length : parseInt(perPageValue);
+            
+            // Filter the data
+            filteredForecasts = allForecasts.filter(item => {
+                return item.sku.toLowerCase().includes(searchTerm) || 
+                       (item.name && item.name.toLowerCase().includes(searchTerm));
+            });
+            
+            // Sort the data
+            const [sortField, sortDirection] = sortValue.split('-');
+            const isAsc = sortDirection === 'asc';
+            
+            filteredForecasts.sort((a, b) => {
+                let aValue, bValue;
+                
+                switch (sortField) {
+                    case 'sku':
+                        aValue = a.sku;
+                        bValue = b.sku;
+                        return isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                    case 'name':
+                        aValue = a.name || '';
+                        bValue = b.name || '';
+                        return isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                    case 'stock':
+                        aValue = a.current_stock;
+                        bValue = b.current_stock;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'forecast30':
+                        aValue = a.forecast_30d;
+                        bValue = b.forecast_30d;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'forecast60':
+                        aValue = a.forecast_60d || 0;
+                        bValue = b.forecast_60d || 0;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'forecast90':
+                        aValue = a.forecast_90d || 0;
+                        bValue = b.forecast_90d || 0;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'production':
+                        aValue = a.production_units;
+                        bValue = b.production_units;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'duedate':
+                        // Handle null dates
+                        if (!a.suggested_due_date && !b.suggested_due_date) return 0;
+                        if (!a.suggested_due_date) return isAsc ? 1 : -1;
+                        if (!b.suggested_due_date) return isAsc ? -1 : 1;
+                        
+                        aValue = new Date(a.suggested_due_date);
+                        bValue = new Date(b.suggested_due_date);
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'forecast':
+                    default:
+                        aValue = a.forecast_30d;
+                        bValue = b.forecast_30d;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                }
+            });
+            
+            // Update sorting icons
+            document.querySelectorAll('.sort-icon').forEach(icon => {
+                icon.innerHTML = '';
+            });
+            
+            const activeHeader = document.querySelector(`.sortable[data-sort="${sortField}"]`);
+            if (activeHeader) {
+                const icon = activeHeader.querySelector('.sort-icon');
+                icon.innerHTML = isAsc ? '▲' : '▼';
+            }
+            
+            // Reset to first page when filter/sort changes
+            currentPage = 1;
+            
+            // Update table and pagination
+            updateTable();
+            updatePagination();
+        }
+        
+        function updateTable() {
+            // Debugging
+            console.log("Updating table with", filteredForecasts.length, "items");
+            
+            const combinedTableBody = document.getElementById('combinedTableBody');
+            combinedTableBody.innerHTML = '';
+            
+            if (filteredForecasts.length === 0) {
+                combinedTableBody.innerHTML = '<tr><td colspan="8" class="text-center">No forecast data available</td></tr>';
+                return;
+            }
+            
+            // Calculate start and end indices for current page
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, filteredForecasts.length);
+            
+            console.log(`Displaying items ${startIndex}-${endIndex} of ${filteredForecasts.length}`);
+            
+            // Display only the items for the current page
+            for (let i = startIndex; i < endIndex; i++) {
+                const item = filteredForecasts[i];
+                const production = item.production;
+                
+                // Shorten the name if it's too long
+                let displayName = item.name;
+                if (displayName && displayName.length > 50) {
+                    displayName = displayName.substring(0, 50) + '...';
+                }
+                
+                const row = document.createElement('tr');
+                row.className = 'product-row';
+                row.setAttribute('data-sku', item.sku);
+                row.style.cursor = 'pointer';
+                
+                // Make sure to escape HTML special characters to prevent XSS
+                const escapedName = (item.name || '').replace(/[&<>"']/g, c => {
+                    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[c];
+                });
+                
+                row.innerHTML = `
+                    <td><span class="chart-icon" style="margin-right: 5px;"><i class="bi bi-bar-chart-line-fill text-primary"></i></span>${item.sku}</td>
+                    <td>${escapedName || item.sku}</td>
+                    <td>${item.current_stock}</td>
+                    <td>${item.forecast_30d !== null ? item.forecast_30d : 'N/A'}</td>
+                    <td>${item.forecast_60d !== null ? item.forecast_60d : 'N/A'}</td>
+                    <td>${item.forecast_90d !== null ? item.forecast_90d : 'N/A'}</td>
+                    <td>${item.production ? item.production.units : '0'}</td>
+                    <td>${item.suggested_due_date || 'N/A'}</td>
+                    <td>
+                        ${production ? 
+                            `<button class="btn btn-sm btn-primary create-order-btn" 
+                                    data-product-id="${item.sku}" 
+                                    data-units="${production.units}"
+                                    data-due-date="${item.suggested_due_date}">
+                                Create Order
+                            </button>` : 
+                            '<span class="badge bg-success">No Production Needed</span>'}
+                    </td>
+                `;
+                combinedTableBody.appendChild(row);
+                
+                // Add row click event - doing this explicitly for each row
+                row.addEventListener('click', function(e) {
+                    // Only trigger if we didn't click on a button
+                    if (!e.target.closest('button')) {
+                        console.log(`Row clicked for ${item.sku}!`);
+                        showProductDetails(item);
+                    }
+                });
+            }
+            
+            // Add event listeners to Create Order buttons
+            document.querySelectorAll('.create-order-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent row click event
+                    const productId = button.getAttribute('data-product-id');
+                    const units = button.getAttribute('data-units');
+                    const dueDate = button.getAttribute('data-due-date');
+                    openProductionModal(productId, units, dueDate);
+                });
+            });
+            
+            // Add a direct click handler to the entire table with event delegation
+            combinedTableBody.addEventListener('click', function(e) {
+                // Find the closest tr element from where the event was triggered
+                const row = e.target.closest('tr.product-row');
+                if (row && !e.target.closest('button')) {
+                    const sku = row.getAttribute('data-sku');
+                    console.log(`Table delegation click for ${sku}`);
+                    const item = filteredForecasts.find(item => item.sku === sku);
+                    if (item) {
+                        showProductDetails(item);
+                    }
+                }
+            });
+        }
+        
+        function updatePagination() {
+            const totalPages = Math.ceil(filteredForecasts.length / itemsPerPage);
+            const paginationContainer = document.getElementById('paginationContainer');
+            paginationContainer.innerHTML = '';
+            
+            // Don't show pagination if there's only one page or showing all
+            if (totalPages <= 1 || document.getElementById('itemsPerPage').value === 'all') {
+                return;
+            }
+            
+            // Add "Previous" button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+            prevLi.innerHTML = `<a class="page-link" href="#" ${currentPage === 1 ? 'tabindex="-1" aria-disabled="true"' : ''}>Previous</a>`;
+            prevLi.addEventListener('click', e => {
+                e.preventDefault();
+                if (currentPage > 1) {
+                    currentPage--;
+                    updateTable();
+                    updatePagination();
+                }
+            });
+            paginationContainer.appendChild(prevLi);
+            
+            // Determine page range to display
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, startPage + 4);
+            
+            if (endPage - startPage < 4) {
+                startPage = Math.max(1, endPage - 4);
+            }
+            
+            // Add page numbers
+            for (let i = startPage; i <= endPage; i++) {
+                const pageLi = document.createElement('li');
+                pageLi.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                pageLi.innerHTML = `<a class="page-link" href="#">${i}</a>`;
+                pageLi.addEventListener('click', e => {
+                    e.preventDefault();
+                    currentPage = i;
+                    updateTable();
+                    updatePagination();
+                });
+                paginationContainer.appendChild(pageLi);
+            }
+            
+            // Add "Next" button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+            nextLi.innerHTML = `<a class="page-link" href="#" ${currentPage === totalPages ? 'tabindex="-1" aria-disabled="true"' : ''}>Next</a>`;
+            nextLi.addEventListener('click', e => {
+                e.preventDefault();
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    updateTable();
+                    updatePagination();
+                }
+            });
+            paginationContainer.appendChild(nextLi);
+        }
+
+        function openProductionModal(productId, units, dueDate) {
+            document.getElementById('productSku').value = productId;
+            document.getElementById('quantity').value = units;
+            
+            // Set due date to suggested date if available, otherwise default to 7 days from now
+            if (dueDate) {
+                document.getElementById('dueDate').value = dueDate;
+            } else {
+                const defaultDate = new Date();
+                defaultDate.setDate(defaultDate.getDate() + 7);
+                document.getElementById('dueDate').value = defaultDate.toISOString().split('T')[0];
+            }
+            
+            const modal = new bootstrap.Modal(document.getElementById('createProductionModal'));
+            modal.show();
+        }
+
+        async function createProductionOrder() {
+            try {
+                const productSku = document.getElementById('productSku').value;
+                const quantity = document.getElementById('quantity').value;
+                const dueDate = document.getElementById('dueDate').value;
+                
+                // For simplicity, we'll use the product SKU as the MMR as well
+                // In a real system, you'd likely need to fetch the correct MMR details
+                const data = {
+                    product_sku: productSku,
+                    quantity: quantity,
+                    mmr_product_sku: productSku,
+                    mmr_version: 1, // Using default version 1
+                    due_date: dueDate
+                };
+                
+                const response = await authenticatedFetch('/api/v1/production-orders/simple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!response) {
+                    throw new Error('Failed to create production order');
+                }
+                
+                const result = await response.json();
+                
+                // Close modal and show success message
+                const modal = bootstrap.Modal.getInstance(document.getElementById('createProductionModal'));
+                modal.hide();
+                
+                alert('Production order created successfully!');
+                
+                // Refresh forecast data
+                loadForecastData();
+                
+            } catch (error) {
+                console.error('Error creating production order:', error);
+                alert(`Failed to create production order: ${error.message}`);
+            }
+        }
+
+        // Global variables to store chart instances
+        let salesTrendChart = null;
+        let forecastComparisonChart = null;
+        let stockForecastChart = null;
+        let productionTimelineChart = null;
+        let currentProductDetail = null;
+
+        // Function to show product details with charts
+        function showProductDetails(item) {
+            // Debug logging
+            console.log("Opening details for product:", item);
+            
+            // Clean up any existing charts first
+            cleanupCharts();
+            
+            // Store the current product for later use
+            currentProductDetail = item;
+            
+            // Set modal title
+            document.getElementById('productDetailsTitle').textContent = 
+                `${item.name || item.sku} (${item.sku}) - Sales Analysis`;
+                
+            // Update stat cards
+            document.getElementById('detailStock').textContent = item.current_stock;
+            document.getElementById('detail30Forecast').textContent = item.forecast_30d;
+            document.getElementById('detailProduction').textContent = item.production ? item.production.units : '0';
+            document.getElementById('detailDueDate').textContent = item.suggested_due_date || 'N/A';
+            
+            // Set up create order button
+            const createOrderBtn = document.getElementById('createOrderFromDetail');
+            if (item.production) {
+                createOrderBtn.style.display = 'block';
+                createOrderBtn.onclick = () => {
+                    // Hide the details modal
+                    const detailsModal = bootstrap.Modal.getInstance(document.getElementById('productDetailsModal'));
+                    detailsModal.hide();
+                    
+                    // Open the production order modal
+                    openProductionModal(item.sku, item.production.units, item.suggested_due_date);
+                };
+            } else {
+                createOrderBtn.style.display = 'none';
+            }
+            
+            // Show the modal and render charts
+            try {
+                // Show the modal first so canvas elements are visible
+                const modal = new bootstrap.Modal(document.getElementById('productDetailsModal'));
+                modal.show();
+                
+                // Slight delay to ensure DOM is ready
+                setTimeout(() => {
+                    renderSalesTrendChart(item);
+                    renderForecastComparisonChart(item);
+                    renderStockForecastChart(item);
+                    renderProductionTimelineChart(item);
+                }, 300);
+            } catch (error) {
+                console.error("Error rendering charts:", error);
+            }
+        }
+        
+        function renderSalesTrendChart(item) {
+            // Destroy previous chart if it exists
+            if (salesTrendChart) {
+                salesTrendChart.destroy();
+                salesTrendChart = null;
+            }
+            
+            // Generate random sales data for demonstration
+            // In production, this would come from the API
+            const today = new Date();
+            const labels = [];
+            const salesData = [];
+            
+            // Create 90 days of sample data
+            for (let i = 90; i >= 0; i--) {
+                const date = new Date();
+                date.setDate(today.getDate() - i);
+                labels.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+                
+                // Create somewhat realistic data with some randomness
+                // Base it on the 30/60/90 day averages we have
+                let dailySales = 0;
+                if (i <= 30) {
+                    // Last 30 days
+                    const avgDaily = item.forecast_30d / 30;
+                    dailySales = Math.max(0, avgDaily * (0.7 + Math.random() * 0.6));
+                } else if (i <= 60) {
+                    // 30-60 days ago
+                    const avgDaily = item.forecast_60d ? item.forecast_60d / 30 : item.forecast_30d / 30;
+                    dailySales = Math.max(0, avgDaily * (0.7 + Math.random() * 0.6));
+                } else {
+                    // 60-90 days ago
+                    const avgDaily = item.forecast_90d ? item.forecast_90d / 30 : item.forecast_30d / 30;
+                    dailySales = Math.max(0, avgDaily * (0.7 + Math.random() * 0.6));
+                }
+                
+                salesData.push(Math.round(dailySales));
+            }
+            
+            // Generate moving averages
+            const movingAvg7Data = [];
+            const movingAvg30Data = [];
+            const movingAvg60Data = [];
+            const movingAvg90Data = [];
+            
+            for (let i = 0; i < salesData.length; i++) {
+                // 7-day moving average
+                if (i < 6) {
+                    movingAvg7Data.push(null);
+                } else {
+                    let sum7 = 0;
+                    for (let j = 0; j < 7; j++) {
+                        sum7 += salesData[i - j];
+                    }
+                    movingAvg7Data.push(Math.round(sum7 / 7 * 10) / 10);
+                }
+                
+                // 30-day moving average
+                if (i < 29) {
+                    movingAvg30Data.push(null);
+                } else {
+                    let sum30 = 0;
+                    for (let j = 0; j < 30; j++) {
+                        sum30 += salesData[i - j];
+                    }
+                    movingAvg30Data.push(Math.round(sum30 / 30 * 10) / 10);
+                }
+                
+                // 60-day moving average
+                if (i < 59) {
+                    movingAvg60Data.push(null);
+                } else {
+                    let sum60 = 0;
+                    for (let j = 0; j < 60; j++) {
+                        sum60 += salesData[i - j];
+                    }
+                    movingAvg60Data.push(Math.round(sum60 / 60 * 10) / 10);
+                }
+                
+                // 90-day moving average
+                if (i < 89) {
+                    movingAvg90Data.push(null);
+                } else {
+                    let sum90 = 0;
+                    for (let j = 0; j < 90; j++) {
+                        sum90 += salesData[i - j];
+                    }
+                    movingAvg90Data.push(Math.round(sum90 / 90 * 10) / 10);
+                }
+            }
+            
+            // Create chart
+            const ctx = document.getElementById('salesTrendChart').getContext('2d');
+            salesTrendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Daily Sales',
+                            data: salesData,
+                            borderColor: 'rgba(54, 162, 235, 0.3)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                            borderWidth: 1,
+                            pointRadius: 1,
+                            fill: true
+                        },
+                        {
+                            label: '7-Day Average',
+                            data: movingAvg7Data,
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false
+                        },
+                        {
+                            label: '30-Day Average',
+                            data: movingAvg30Data,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false
+                        },
+                        {
+                            label: '60-Day Average',
+                            data: movingAvg60Data,
+                            borderColor: 'rgba(255, 159, 64, 1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false
+                        },
+                        {
+                            label: '90-Day Average',
+                            data: movingAvg90Data,
+                            borderColor: 'rgba(153, 102, 255, 1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                maxTicksLimit: 10
+                            }
+                        },
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function renderForecastComparisonChart(item) {
+            // Destroy previous chart if it exists
+            if (forecastComparisonChart) {
+                forecastComparisonChart.destroy();
+                forecastComparisonChart = null;
+            }
+            
+            // Create data
+            const data = {
+                labels: ['30-Day', '60-Day', '90-Day'],
+                datasets: [{
+                    label: 'Forecast Units',
+                    data: [
+                        item.forecast_30d, 
+                        item.forecast_60d || 0, 
+                        item.forecast_90d || 0
+                    ],
+                    backgroundColor: [
+                        'rgba(255, 99, 132, 0.7)',
+                        'rgba(54, 162, 235, 0.7)',
+                        'rgba(255, 206, 86, 0.7)'
+                    ],
+                    borderColor: [
+                        'rgba(255, 99, 132, 1)',
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 206, 86, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            };
+            
+            // Create chart
+            const ctx = document.getElementById('forecastComparisonChart').getContext('2d');
+            forecastComparisonChart = new Chart(ctx, {
+                type: 'bar',
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function renderStockForecastChart(item) {
+            // Destroy previous chart if it exists
+            if (stockForecastChart) {
+                stockForecastChart.destroy();
+                stockForecastChart = null;
+            }
+            
+            // Data
+            const data = {
+                labels: ['Current Stock', '30-Day Forecast'],
+                datasets: [{
+                    data: [item.current_stock, item.forecast_30d],
+                    backgroundColor: [
+                        'rgba(75, 192, 192, 0.7)',
+                        'rgba(255, 99, 132, 0.7)'
+                    ],
+                    borderColor: [
+                        'rgba(75, 192, 192, 1)',
+                        'rgba(255, 99, 132, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            };
+            
+            // Create chart
+            const ctx = document.getElementById('stockForecastChart').getContext('2d');
+            stockForecastChart = new Chart(ctx, {
+                type: 'bar',
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function renderProductionTimelineChart(item) {
+            // Destroy previous chart if it exists
+            if (productionTimelineChart) {
+                productionTimelineChart.destroy();
+                productionTimelineChart = null;
+            }
+            
+            // Get dates for the timeline
+            const today = new Date();
+            const nextMonth = new Date();
+            nextMonth.setDate(today.getDate() + 30);
+            
+            // If we have a suggested due date, use it
+            let dueDate = null;
+            if (item.suggested_due_date) {
+                dueDate = new Date(item.suggested_due_date);
+            }
+            
+            // Calculate when stock runs out based on forecast and current stock
+            const dailyUsage = item.forecast_30d / 30;
+            const daysOfStock = dailyUsage > 0 ? Math.floor(item.current_stock / dailyUsage) : 30;
+            
+            const stockOutDate = new Date();
+            stockOutDate.setDate(today.getDate() + daysOfStock);
+            
+            // Create timeline segments
+            const datasets = [];
+            
+            // Basic timeline showing the next 30 days
+            datasets.push({
+                label: 'Timeline',
+                data: [
+                    {
+                        x: today.toISOString().split('T')[0],
+                        y: 'Timeline'
+                    },
+                    {
+                        x: nextMonth.toISOString().split('T')[0],
+                        y: 'Timeline'
+                    }
+                ],
+                backgroundColor: 'rgba(200, 200, 200, 0.2)',
+                borderColor: 'rgba(200, 200, 200, 0.5)',
+                borderWidth: 1,
+                barPercentage: 0.2
+            });
+            
+            // Current stock period
+            if (daysOfStock > 0 && daysOfStock < 30) {
+                datasets.push({
+                    label: 'Current Stock',
+                    data: [
+                        {
+                            x: today.toISOString().split('T')[0],
+                            y: 'Timeline'
+                        },
+                        {
+                            x: stockOutDate.toISOString().split('T')[0],
+                            y: 'Timeline'
+                        }
+                    ],
+                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1,
+                    barPercentage: 0.5
+                });
+            }
+            
+            // Production period if needed
+            if (item.production && dueDate) {
+                datasets.push({
+                    label: 'Production Period',
+                    data: [
+                        {
+                            x: today.toISOString().split('T')[0],
+                            y: 'Timeline'
+                        },
+                        {
+                            x: dueDate.toISOString().split('T')[0],
+                            y: 'Timeline'
+                        }
+                    ],
+                    backgroundColor: 'rgba(255, 159, 64, 0.7)',
+                    borderColor: 'rgba(255, 159, 64, 1)',
+                    borderWidth: 1,
+                    barPercentage: 0.5
+                });
+            }
+            
+            // Create chart
+            const ctx = document.getElementById('productionTimelineChart').getContext('2d');
+            productionTimelineChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.dataset.label || '';
+                                    if (label === 'Current Stock') {
+                                        return `Stock will last until ${stockOutDate.toLocaleDateString()}`;
+                                    } else if (label === 'Production Period') {
+                                        return `Production due by ${dueDate.toLocaleDateString()}`;
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day'
+                            },
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Function to clean up all chart instances
+        function cleanupCharts() {
+            if (salesTrendChart) {
+                salesTrendChart.destroy();
+                salesTrendChart = null;
+            }
+            if (forecastComparisonChart) {
+                forecastComparisonChart.destroy();
+                forecastComparisonChart = null;
+            }
+            if (stockForecastChart) {
+                stockForecastChart.destroy();
+                stockForecastChart = null;
+            }
+            if (productionTimelineChart) {
+                productionTimelineChart.destroy();
+                productionTimelineChart = null;
+            }
+            
+            // Clean up any lingering modal backdrops
+            const modalBackdrops = document.querySelectorAll('.modal-backdrop');
+            modalBackdrops.forEach(backdrop => {
+                backdrop.classList.remove('show');
+                setTimeout(() => {
+                    backdrop.remove();
+                }, 150);
+            });
+            
+            // Reset body classes that might have been added by Bootstrap
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+        }
+    </script>
+</body>
+</html> 

@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit MMR - Inventory & Production Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <!-- Select2 for searchable dropdowns -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js" defer></script>
+    <style>
+        .dynamic-list-container {
+            margin-bottom: 1rem;
+        }
+        .list-item {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            align-items: center;
+        }
+        .remove-btn {
+            color: #dc3545;
+            cursor: pointer;
+        }
+        .form-section {
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .step-item {
+            border-left: 4px solid #2d864f;
+            padding: 10px;
+            margin-bottom: 12px;
+            background-color: #f9fafb;
+            border-radius: 0.25rem;
+        }
+        .step-item .list-item {
+            margin-bottom: 0.25rem;
+        }
+        .sub-steps-container {
+            margin-left: 30px;
+            padding-left: 15px;
+            border-left: 2px dashed #d1d5db;
+            margin-top: 0.5rem;
+        }
+        .sub-step-item {
+            background-color: #f0f9ff;
+            border-radius: 0.25rem;
+            padding: 5px;
+            margin: 4px 0;
+        }
+        .add-sub-step {
+            margin-top: 0.5rem;
+            margin-left: 30px;
+        }
+        .step-number-input {
+            width: 80px;
+        }
+        .sub-step-number-input {
+            width: 100px;
+        }
+        .description-input {
+            flex: 1;
+        }
+        .step-type-select {
+            width: 120px;
+        }
+        /* Adjusted field sizes */
+        .select2-container {
+            width: 500px !important; /* Increased width for searchable dropdown */
+        }
+        .quantity-input {
+            width: 100px; /* Smaller width for quantity */
+        }
+        .unit-select {
+            width: 80px; /* Smaller width for unit of measure */
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/mmr.html">MMR</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item admin-only" style="display: none;">
+                        <a class="nav-link" href="/admin.html">Admin</a>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row mb-3">
+            <div class="col-12 d-flex justify-content-between">
+                <a id="backToDetailsLink" href="#" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to Details
+                </a>
+                <button id="saveMMR" class="btn btn-primary">
+                    <i class="bi bi-save"></i> Save Changes
+                </button>
+            </div>
+        </div>
+
+        <form id="mmrEditForm">
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Basic Information</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 form-group">
+                            <label for="productSku">SKU</label>
+                            <input type="text" class="form-control" id="productSku" readonly>
+                        </div>
+                        <div class="col-md-6 form-group">
+                            <label for="mmrVersion">Version</label>
+                            <input type="text" class="form-control" id="mmrVersion" readonly>
+                        </div>
+                        <div class="col-md-6 form-group">
+                            <label for="productName">Product Name</label>
+                            <input type="text" class="form-control" id="productName" readonly>
+                        </div>
+                        <div class="col-md-6 form-group">
+                            <label for="baseQuantity">Base Quantity</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="baseQuantity" step="0.01">
+                                <select class="form-select" id="baseUnit">
+                                    <option value="g">g</option>
+                                    <option value="kg">kg</option>
+                                    <option value="ml">ml</option>
+                                    <option value="l">l</option>
+                                    <option value="units">units</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ingredients Section -->
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Ingredients</h5>
+                </div>
+                <div class="card-body">
+                    <div class="dynamic-list-container" id="ingredientsList">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addIngredient">
+                        <i class="bi bi-plus"></i> Add Ingredient
+                    </button>
+                </div>
+            </div>
+
+            <!-- Equipment Section -->
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Equipment</h5>
+                </div>
+                <div class="card-body">
+                    <div class="dynamic-list-container" id="equipmentList">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addEquipment">
+                        <i class="bi bi-plus"></i> Add Equipment
+                    </button>
+                </div>
+            </div>
+
+            <!-- Steps Section -->
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Manufacturing Steps</h5>
+                </div>
+                <div class="card-body">
+                    <div class="dynamic-list-container" id="stepsList">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addStep">
+                        <i class="bi bi-plus"></i> Add Step
+                    </button>
+                </div>
+            </div>
+
+            <!-- Packaging Section -->
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Packaging</h5>
+                </div>
+                <div class="card-body">
+                    <div class="dynamic-list-container" id="packagingList">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addPackaging">
+                        <i class="bi bi-plus"></i> Add Packaging
+                    </button>
+                </div>
+            </div>
+
+            <!-- Labels Section -->
+            <div class="section-card">
+                <div class="card-header">
+                    <h5 class="mb-0">Labels</h5>
+                </div>
+                <div class="card-body">
+                    <div class="dynamic-list-container" id="labelsList">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addLabel">
+                        <i class="bi bi-plus"></i> Add Label
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script src="/js/auth.js"></script>
+    <script>
+        let mmrData = null;
+        let productSku = null;
+        let mmrVersion = null;
+        let inventoryItems = { ingredients: [], packaging: [], labels: [] };
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Extract URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            productSku = urlParams.get('sku');
+            mmrVersion = urlParams.get('version');
+
+            // Validate parameters
+            if (!productSku || !mmrVersion) {
+                alert('Missing required parameters: SKU and Version are required');
+                window.location.href = '/mmr.html';
+                return;
+            }
+
+            // Set the "Back to Details" link dynamically
+            const backLink = document.getElementById('backToDetailsLink');
+            backLink.href = `/mmr-detail.html?sku=${encodeURIComponent(productSku)}&version=${encodeURIComponent(mmrVersion)}`;
+
+            // Fetch inventory items for searchable dropdowns
+            try {
+                const inventoryResponse = await authenticatedFetch('/api/inventory');
+                if (inventoryResponse.ok) {
+                    const items = await inventoryResponse.json();
+                    console.log('Inventory items fetched:', items);
+
+                    // Log distinct type values for debugging
+                    const types = [...new Set(items.map(item => item.type))];
+                    console.log('Distinct type values in inventory:', types);
+
+                    // Normalize type values and filter
+                    inventoryItems.ingredients = items.filter(item => {
+                        const type = (item.type || '').toLowerCase();
+                        return type === 'raw ingredient' || type === 'raw_ingredient';
+                    });
+                    inventoryItems.packaging = items.filter(item => {
+                        const type = (item.type || '').toLowerCase();
+                        return type === 'packaging';
+                    });
+                    inventoryItems.labels = items.filter(item => {
+                        const type = (item.type || '').toLowerCase();
+                        return type === 'label';
+                    });
+
+                    console.log('Filtered inventory items:', inventoryItems);
+
+                    // If no items are found, log a warning
+                    if (inventoryItems.ingredients.length === 0) {
+                        console.warn('No raw ingredients found in inventory');
+                    }
+                    if (inventoryItems.packaging.length === 0) {
+                        console.warn('No packaging items found in inventory');
+                    }
+                    if (inventoryItems.labels.length === 0) {
+                        console.warn('No label items found in inventory');
+                    }
+                } else {
+                    console.error('Failed to fetch inventory items, HTTP status:', inventoryResponse.status, inventoryResponse.statusText);
+                }
+            } catch (error) {
+                console.error('Error fetching inventory items:', error);
+            }
+
+            // Fetch MMR data
+            try {
+                const response = await authenticatedFetch(`/api/mmr/${productSku}/${mmrVersion}`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch MMR data');
+                }
+                mmrData = await response.json();
+
+                // Fetch product name from inventory if not in MMR data
+                if (!mmrData.productName) {
+                    try {
+                        const inventoryResponse = await authenticatedFetch(`/api/inventory/${productSku}`);
+                        if (inventoryResponse.ok) {
+                            const productData = await inventoryResponse.json();
+                            mmrData.productName = productData.name || '';
+                        }
+                    } catch (error) {
+                        console.warn('Unable to fetch product name:', error);
+                        mmrData.productName = productSku; // Fallback to SKU
+                    }
+                }
+
+                populateForm(mmrData);
+            } catch (error) {
+                console.error('Error loading MMR:', error);
+                alert('Failed to load MMR data');
+                window.location.href = '/mmr.html';
+            }
+
+            setupEventListeners();
+        });
+
+        function populateForm(data) {
+            document.getElementById('productSku').value = data.product_sku || '';
+            document.getElementById('mmrVersion').value = data.version || '';
+            document.getElementById('productName').value = data.productName || '';
+            document.getElementById('baseQuantity').value = data.base_quantity || '';
+            document.getElementById('baseUnit').value = data.base_unit || 'units';
+
+            populateDynamicList('ingredientsList', data.ingredients || [], createIngredientItem);
+            populateDynamicList('equipmentList', data.equipment || [], createEquipmentItem);
+            populateDynamicList('stepsList', data.steps || [], createStepItem);
+            populateDynamicList('packagingList', data.packaging || [], createPackagingItem);
+            populateDynamicList('labelsList', data.labels || [], createLabelItem);
+        }
+
+        function createIngredientItem(item = {}) {
+            const options = inventoryItems.ingredients.map(i => 
+                `<option value="${i.sku}" data-name="${i.name || ''}" ${i.sku === (item.ingredient_sku || item.sku) ? 'selected' : ''}>${i.sku} - ${i.name || 'Unnamed'}</option>`
+            ).join('');
+            return `
+                <div class="list-item">
+                    <select class="form-control ingredient-select" data-type="ingredient">
+                        <option value="">Select an item</option>
+                        ${options}
+                    </select>
+                    <input type="number" class="form-control quantity-input" placeholder="Quantity" value="${item.quantity || ''}">
+                    <select class="form-control unit-select">
+                        <option value="g" ${item.unit_type === 'g' ? 'selected' : ''}>g</option>
+                        <option value="kg" ${item.unit_type === 'kg' ? 'selected' : ''}>kg</option>
+                        <option value="ml" ${item.unit_type === 'ml' ? 'selected' : ''}>ml</option>
+                        <option value="l" ${item.unit_type === 'l' ? 'selected' : ''}>l</option>
+                        <option value="units" ${item.unit_type === 'units' ? 'selected' : ''}>units</option>
+                    </select>
+                    <i class="bi bi-trash remove-btn"></i>
+                </div>
+            `;
+        }
+
+        function createEquipmentItem(item = {}) {
+            return `
+                <div class="list-item">
+                    <input type="text" class="form-control" placeholder="Equipment Name" value="${item.equipment_name || item.name || ''}">
+                    <i class="bi bi-trash remove-btn"></i>
+                </div>
+            `;
+        }
+
+        function createStepItem(item = {}) {
+            // Sort sub-steps numerically
+            const subSteps = (item.subSteps || []).sort((a, b) => {
+                const aParts = (a.sub_step_number || '').split('.').map(Number);
+                const bParts = (b.sub_step_number || '').split('.').map(Number);
+                for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+                    const aVal = aParts[i] || 0;
+                    const bVal = bParts[i] || 0;
+                    if (aVal !== bVal) return aVal - bVal;
+                }
+                return 0;
+            }).map(subStep => `
+                <div class="list-item sub-step-item">
+                    <input type="text" class="form-control sub-step-number-input" placeholder="Sub-Step Number" value="${subStep.sub_step_number || ''}">
+                    <input type="text" class="form-control description-input" placeholder="Description" value="${subStep.description || ''}">
+                    <select class="form-control step-type-select">
+                        <option value="sub" ${subStep.step_type === 'sub' ? 'selected' : ''}>Sub-Step</option>
+                        <option value="qc" ${subStep.step_type === 'qc' ? 'selected' : ''}>QC Check</option>
+                    </select>
+                    <i class="bi bi-trash remove-btn"></i>
+                </div>
+            `).join('');
+
+            return `
+                <div class="step-item">
+                    <div class="list-item">
+                        <input type="number" class="form-control step-number-input" placeholder="Step Number" value="${item.step_number || ''}">
+                        <input type="text" class="form-control description-input" placeholder="Title/Description" value="${item.title || item.description || ''}">
+                        <i class="bi bi-trash remove-btn"></i>
+                    </div>
+                    <div class="sub-steps-container">
+                        ${subSteps}
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm add-sub-step">Add Sub-Step</button>
+                </div>
+            `;
+        }
+
+        function createPackagingItem(item = {}) {
+            const options = inventoryItems.packaging.map(i => 
+                `<option value="${i.sku}" data-name="${i.name || ''}" ${i.sku === (item.packaging_sku || item.sku) ? 'selected' : ''}>${i.sku} - ${i.name || 'Unnamed'}</option>`
+            ).join('');
+            return `
+                <div class="list-item">
+                    <select class="form-control packaging-select" data-type="packaging">
+                        <option value="">Select an item</option>
+                        ${options}
+                    </select>
+                    <input type="number" class="form-control quantity-input" placeholder="Quantity" value="${item.quantity || ''}">
+                    <select class="form-control unit-select">
+                        <option value="g" ${item.unit_type === 'g' ? 'selected' : ''}>g</option>
+                        <option value="kg" ${item.unit_type === 'kg' ? 'selected' : ''}>kg</option>
+                        <option value="ml" ${item.unit_type === 'ml' ? 'selected' : ''}>ml</option>
+                        <option value="l" ${item.unit_type === 'l' ? 'selected' : ''}>l</option>
+                        <option value="units" ${item.unit_type === 'units' ? 'selected' : ''}>units</option>
+                    </select>
+                    <i class="bi bi-trash remove-btn"></i>
+                </div>
+            `;
+        }
+
+        function createLabelItem(item = {}) {
+            const options = inventoryItems.labels.map(i => 
+                `<option value="${i.sku}" data-name="${i.name || ''}" ${i.sku === (item.label_sku || item.sku) ? 'selected' : ''}>${i.sku} - ${i.name || 'Unnamed'}</option>`
+            ).join('');
+            return `
+                <div class="list-item">
+                    <select class="form-control label-select" data-type="label">
+                        <option value="">Select an item</option>
+                        ${options}
+                    </select>
+                    <input type="number" class="form-control quantity-input" placeholder="Quantity" value="${item.quantity || ''}">
+                    <select class="form-control unit-select">
+                        <option value="g" ${item.unit_type === 'g' ? 'selected' : ''}>g</option>
+                        <option value="kg" ${item.unit_type === 'kg' ? 'selected' : ''}>kg</option>
+                        <option value="ml" ${item.unit_type === 'ml' ? 'selected' : ''}>ml</option>
+                        <option value="l" ${item.unit_type === 'l' ? 'selected' : ''}>l</option>
+                        <option value="units" ${item.unit_type === 'units' ? 'selected' : ''}>units</option>
+                    </select>
+                    <i class="bi bi-trash remove-btn"></i>
+                </div>
+            `;
+        }
+
+        function populateDynamicList(containerId, items, createItemFn) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = items.map(createItemFn).join('');
+            // Initialize Select2 for any new dropdowns
+            $(container).find('.ingredient-select, .packaging-select, .label-select').select2({
+                placeholder: 'Select an item',
+                allowClear: true,
+                templateResult: function(data) {
+                    if (!data.id) return data.text;
+                    return $(`<span>${data.text}</span>`);
+                },
+                templateSelection: function(data) {
+                    return data.text || 'Select an item';
+                }
+            });
+        }
+
+        function setupEventListeners() {
+            // Initialize Select2 for existing dropdowns
+            $('.ingredient-select, .packaging-select, .label-select').select2({
+                placeholder: 'Select an item',
+                allowClear: true,
+                templateResult: function(data) {
+                    if (!data.id) return data.text;
+                    return $(`<span>${data.text}</span>`);
+                },
+                templateSelection: function(data) {
+                    return data.text || 'Select an item';
+                }
+            });
+
+            // Add Ingredient
+            document.getElementById('addIngredient').addEventListener('click', () => {
+                const container = document.getElementById('ingredientsList');
+                container.insertAdjacentHTML('beforeend', createIngredientItem());
+                $(container).find('.ingredient-select:last').select2({
+                    placeholder: 'Select an item',
+                    allowClear: true,
+                    templateResult: function(data) {
+                        if (!data.id) return data.text;
+                        return $(`<span>${data.text}</span>`);
+                    },
+                    templateSelection: function(data) {
+                        return data.text || 'Select an item';
+                    }
+                });
+            });
+
+            // Add Equipment
+            document.getElementById('addEquipment').addEventListener('click', () => {
+                const container = document.getElementById('equipmentList');
+                container.insertAdjacentHTML('beforeend', createEquipmentItem());
+            });
+
+            // Add Step
+            document.getElementById('addStep').addEventListener('click', () => {
+                const container = document.getElementById('stepsList');
+                container.insertAdjacentHTML('beforeend', createStepItem());
+            });
+
+            // Add Packaging
+            document.getElementById('addPackaging').addEventListener('click', () => {
+                const container = document.getElementById('packagingList');
+                container.insertAdjacentHTML('beforeend', createPackagingItem());
+                $(container).find('.packaging-select:last').select2({
+                    placeholder: 'Select an item',
+                    allowClear: true,
+                    templateResult: function(data) {
+                        if (!data.id) return data.text;
+                        return $(`<span>${data.text}</span>`);
+                    },
+                    templateSelection: function(data) {
+                        return data.text || 'Select an item';
+                    }
+                });
+            });
+
+            // Add Label
+            document.getElementById('addLabel').addEventListener('click', () => {
+                const container = document.getElementById('labelsList');
+                container.insertAdjacentHTML('beforeend', createLabelItem());
+                $(container).find('.label-select:last').select2({
+                    placeholder: 'Select an item',
+                    allowClear: true,
+                    templateResult: function(data) {
+                        if (!data.id) return data.text;
+                        return $(`<span>${data.text}</span>`);
+                    },
+                    templateSelection: function(data) {
+                        return data.text || 'Select an item';
+                    }
+                });
+            });
+
+            // Add Sub-Step
+            document.addEventListener('click', (e) => {
+                if (e.target.classList.contains('add-sub-step')) {
+                    const subStepsContainer = e.target.previousElementSibling;
+                    subStepsContainer.insertAdjacentHTML('beforeend', `
+                        <div class="list-item sub-step-item">
+                            <input type="text" class="form-control sub-step-number-input" placeholder="Sub-Step Number">
+                            <input type="text" class="form-control description-input" placeholder="Description">
+                            <select class="form-control step-type-select">
+                                <option value="sub">Sub-Step</option>
+                                <option value="qc">QC Check</option>
+                            </select>
+                            <i class="bi bi-trash remove-btn"></i>
+                        </div>
+                    `);
+                }
+            });
+
+            // Remove Item
+            document.addEventListener('click', (e) => {
+                if (e.target.classList.contains('remove-btn')) {
+                    e.target.closest('.list-item').remove();
+                }
+            });
+
+            // Save Changes
+            document.getElementById('saveMMR').addEventListener('click', saveChanges);
+        }
+
+        async function saveChanges() {
+            const updatedData = {
+                product_sku: document.getElementById('productSku').value,
+                version: document.getElementById('mmrVersion').value,
+                base_quantity: parseFloat(document.getElementById('baseQuantity').value),
+                base_unit: document.getElementById('baseUnit').value,
+                ingredients: Array.from(document.querySelectorAll('#ingredientsList .list-item')).map(item => {
+                    const sku = item.querySelector('.ingredient-select').value;
+                    const selectedItem = inventoryItems.ingredients.find(i => i.sku === sku);
+                    return {
+                        sku: sku,
+                        name: selectedItem ? selectedItem.name : '',
+                        quantity: parseFloat(item.querySelector('.quantity-input').value),
+                        unit: item.querySelector('.unit-select').value
+                    };
+                }),
+                equipment: Array.from(document.querySelectorAll('#equipmentList .list-item')).map(item => ({
+                    name: item.children[0].value
+                })),
+                steps: Array.from(document.querySelectorAll('#stepsList .step-item')).map(step => ({
+                    step_number: parseInt(step.querySelector('.step-number-input').value),
+                    title: step.querySelector('.description-input').value,
+                    subSteps: Array.from(step.querySelectorAll('.sub-steps-container .list-item')).map(subStep => ({
+                        sub_step_number: subStep.querySelector('.sub-step-number-input').value,
+                        description: subStep.querySelector('.description-input').value,
+                        step_type: subStep.querySelector('.step-type-select').value
+                    }))
+                })),
+                packaging: Array.from(document.querySelectorAll('#packagingList .list-item')).map(item => {
+                    const sku = item.querySelector('.packaging-select').value;
+                    const selectedItem = inventoryItems.packaging.find(i => i.sku === sku);
+                    return {
+                        sku: sku,
+                        name: selectedItem ? selectedItem.name : '',
+                        quantity: parseFloat(item.querySelector('.quantity-input').value),
+                        unit: item.querySelector('.unit-select').value
+                    };
+                }),
+                labels: Array.from(document.querySelectorAll('#labelsList .list-item')).map(item => {
+                    const sku = item.querySelector('.label-select').value;
+                    const selectedItem = inventoryItems.labels.find(i => i.sku === sku);
+                    return {
+                        sku: sku,
+                        name: selectedItem ? selectedItem.name : '',
+                        quantity: parseFloat(item.querySelector('.quantity-input').value),
+                        unit: item.querySelector('.unit-select').value
+                    };
+                })
+            };
+
+            try {
+                const response = await authenticatedFetch(`/api/mmr/${updatedData.product_sku}/${updatedData.version}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(updatedData)
+                });
+                
+                if (response.ok) {
+                    alert('MMR updated successfully');
+                    window.location.href = `/mmr-detail.html?sku=${encodeURIComponent(updatedData.product_sku)}&version=${encodeURIComponent(updatedData.version)}`;
+                } else {
+                    throw new Error('Failed to save MMR');
+                }
+            } catch (error) {
+                console.error('Error saving MMR:', error);
+                alert('Failed to save changes');
+            }
+        }
+    </script>
+</body>
+</html>

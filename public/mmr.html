@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMR Management - Inventory & Production Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <!-- jQuery first, then other scripts -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" defer></script>
+    <!-- Inline script to define handlers immediately -->
+    <script>
+        console.log('Inline script loaded');
+        
+        // Basic handlers that will work immediately
+        function handleAddIngredient() {
+            console.log('Inline handleAddIngredient called');
+            try {
+                const template = document.getElementById('ingredientTemplate');
+                const list = document.getElementById('ingredientsList');
+                
+                if (!template || !list) {
+                    console.error('Ingredient template or list not found');
+                    alert('Error: Could not add ingredient - template or list not found');
+                    return;
+                }
+                
+                const clone = template.content.cloneNode(true);
+                list.appendChild(clone);
+                
+                // Load SKU options if the external function is available
+                const select = list.lastElementChild.querySelector('.ingredient-select');
+                if (select && window.loadInventoryOptions) {
+                    window.loadInventoryOptions(select, ['Raw Ingredient']);
+                }
+            } catch (err) {
+                console.error('Error in handleAddIngredient:', err);
+                alert('Error adding ingredient: ' + err.message);
+            }
+        }
+        
+        function handleAddEquipment() {
+            console.log('Inline handleAddEquipment called');
+            try {
+                const template = document.getElementById('equipmentTemplate');
+                const list = document.getElementById('equipmentList');
+                
+                if (!template || !list) {
+                    console.error('Equipment template or list not found');
+                    alert('Error: Could not add equipment - template or list not found');
+                    return;
+                }
+                
+                const clone = template.content.cloneNode(true);
+                list.appendChild(clone);
+            } catch (err) {
+                console.error('Error in handleAddEquipment:', err);
+                alert('Error adding equipment: ' + err.message);
+            }
+        }
+        
+        function handleAddStep() {
+            console.log('Inline handleAddStep called');
+            try {
+                const template = document.getElementById('stepTemplate');
+                const list = document.getElementById('stepsList');
+                
+                if (!template || !list) {
+                    console.error('Step template or list not found');
+                    alert('Error: Could not add step - template or list not found');
+                    return;
+                }
+                
+                const clone = template.content.cloneNode(true);
+                list.appendChild(clone);
+            } catch (err) {
+                console.error('Error in handleAddStep:', err);
+                alert('Error adding step: ' + err.message);
+            }
+        }
+        
+        function handleAddPackaging() {
+            console.log('Inline handleAddPackaging called');
+            try {
+                const template = document.getElementById('packagingTemplate');
+                const list = document.getElementById('packagingList');
+                
+                if (!template || !list) {
+                    console.error('Packaging template or list not found');
+                    alert('Error: Could not add packaging - template or list not found');
+                    return;
+                }
+                
+                const clone = template.content.cloneNode(true);
+                list.appendChild(clone);
+                
+                // Load SKU options if the external function is available
+                const select = list.lastElementChild.querySelector('.packaging-select');
+                if (select && window.loadInventoryOptions) {
+                    window.loadInventoryOptions(select, ['Packaging']);
+                }
+            } catch (err) {
+                console.error('Error in handleAddPackaging:', err);
+                alert('Error adding packaging: ' + err.message);
+            }
+        }
+        
+        function handleAddLabel() {
+            console.log('Inline handleAddLabel called');
+            try {
+                const template = document.getElementById('labelTemplate');
+                const list = document.getElementById('labelsList');
+                
+                if (!template || !list) {
+                    console.error('Label template or list not found');
+                    alert('Error: Could not add label - template or list not found');
+                    return;
+                }
+                
+                const clone = template.content.cloneNode(true);
+                list.appendChild(clone);
+                
+                // Load SKU options if the external function is available
+                const select = list.lastElementChild.querySelector('.label-select');
+                if (select && window.loadInventoryOptions) {
+                    window.loadInventoryOptions(select, ['Label']);
+                }
+            } catch (err) {
+                console.error('Error in handleAddLabel:', err);
+                alert('Error adding label: ' + err.message);
+            }
+        }
+    </script>
+    <!-- External scripts with defer to ensure they run after HTML is parsed -->
+    <script src="/js/auth.js" defer></script>
+    <script src="/js/mmr.js" defer></script>
+    <style>
+        .form-section {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .form-section h6 {
+            margin-bottom: 15px;
+            font-weight: 700;
+            font-size: 1rem;
+            color: #1f2a44;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .version-card {
+            margin-bottom: 15px;
+        }
+        
+        .main-step {
+            border-left: 4px solid #2d864f;
+            padding: 20px;
+            margin-bottom: 16px;
+            background-color: #f9fafb;
+            border-radius: 0.5rem;
+        }
+        
+        .sub-steps-container {
+            margin-left: 24px;
+            margin-top: 12px;
+            padding-left: 16px;
+            border-left: 2px dashed #d1d5db;
+        }
+        
+        .sub-step {
+            padding: 12px 8px;
+            border-bottom: 1px dotted #e5e7eb;
+        }
+        
+        .qc-step {
+            padding: 12px 8px;
+            background-color: #f0f9ff;
+            border-radius: 0.5rem;
+            margin: 8px 0;
+        }
+        
+        .step-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .step-input-group {
+            margin-bottom: 10px;
+        }
+
+        .list-group-item {
+            padding: 16px;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            margin-bottom: 8px;
+        }
+        
+        .list-group {
+            margin-bottom: 15px;
+        }
+        
+        .add-item-btn {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+            font-size: 0.875rem;
+            background-color: #2d864f;
+            border-color: #2d864f;
+        }
+        
+        .add-item-btn:hover {
+            background-color: #256d41;
+            border-color: #256d41;
+        }
+        
+        .add-item-btn i {
+            margin-right: 6px;
+        }
+        
+        .btn-danger {
+            background-color: #dc2626;
+            border-color: #dc2626;
+        }
+        
+        .btn-danger:hover {
+            background-color: #b91c1c;
+            border-color: #b91c1c;
+        }
+        
+        /* New styles for the accordion layout */
+        .accordion-button:not(.collapsed) {
+            background-color: #f1f5f9;
+            color: #1f2a44;
+        }
+        
+        .accordion-button:focus {
+            box-shadow: 0 0 0 0.2rem rgba(45, 134, 79, 0.25);
+        }
+        
+        .accordion-item {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            margin-bottom: 8px;
+        }
+        
+        .card-header {
+            font-weight: bold;
+        }
+        
+        .card {
+            margin-bottom: 30px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        
+        /* Improve spacing for mobile */
+        @media (max-width: 768px) {
+            .step-actions {
+                flex-direction: column;
+                gap: 5px;
+            }
+            
+            .step-actions button {
+                margin-bottom: 5px;
+            }
+        }
+
+        /* Additional spacing for form fields */
+        .mb-3 {
+            margin-bottom: 1.5rem !important;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/mmr.html">MMR</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
+                    <li class="nav-item admin-only" style="display: none;">
+                        <a class="nav-link" href="/admin.html">Admin</a>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Product Search and MMR Display Section -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">Search Products</h5>
+            </div>
+            <div class="card-body">
+                <div class="row mb-4">
+                    <div class="col-md-12">
+                        <div class="input-group">
+                            <select id="productSearchInput" class="form-select" style="width: 100%">
+                                <option value="">Search for a product...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div id="mmrSearchResults" class="mt-3">
+                    <!-- MMR search results will be displayed here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- MMR Creation Form -->
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="card-title mb-0">Create New MMR Version</h5>
+            </div>
+            <div class="card-body">
+                <form id="mmrForm">
+                    <div class="form-section">
+                        <h6>Product Information</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="productSkuSearch" class="form-label">Product</label>
+                                    <select id="productSkuSearch" class="form-select" style="width: 100%">
+                                        <option value="">Search for a product...</option>
+                                    </select>
+                                    <input type="hidden" id="productSku" name="productSku" required>
+                                </div>
+                                <div id="selectedProductInfo" style="display: none;" class="alert alert-info">
+                                    <strong>Selected Product:</strong><br>
+                                    <span id="selectedProductName"></span><br>
+                                    <small id="selectedProductSku" class="text-muted"></small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="baseQuantity" class="form-label">Base Quantity</label>
+                                    <input type="number" class="form-control" id="baseQuantity" name="baseQuantity" required step="0.01">
+                                    <small class="text-muted">The base quantity for this MMR version</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Single column layout for all form sections -->
+                    <div class="form-section mb-4">
+                        <h6>Ingredients</h6>
+                        <ul class="list-group mb-3" id="ingredientsList"></ul>
+                        <button type="button" class="btn btn-primary add-item-btn" onclick="handleAddIngredient()">
+                            <i class="bi bi-plus-circle"></i> Add Ingredient
+                        </button>
+                    </div>
+
+                    <div class="form-section mb-4">
+                        <h6>Equipment</h6>
+                        <ul class="list-group mb-3" id="equipmentList"></ul>
+                        <button type="button" class="btn btn-primary add-item-btn" onclick="handleAddEquipment()">
+                            <i class="bi bi-plus-circle"></i> Add Equipment
+                        </button>
+                    </div>
+
+                    <div class="form-section mb-4">
+                        <h6>Steps</h6>
+                        <ul class="list-group mb-3" id="stepsList"></ul>
+                        <button type="button" class="btn btn-primary add-item-btn" onclick="handleAddStep()">
+                            <i class="bi bi-plus-circle"></i> Add Step
+                        </button>
+                    </div>
+
+                    <div class="form-section mb-4">
+                        <h6>Packaging</h6>
+                        <ul class="list-group mb-3" id="packagingList"></ul>
+                        <button type="button" class="btn btn-primary add-item-btn" onclick="handleAddPackaging()">
+                            <i class="bi bi-plus-circle"></i> Add Packaging
+                        </button>
+                    </div>
+
+                    <div class="form-section mb-4">
+                        <h6>Labels</h6>
+                        <ul class="list-group mb-3" id="labelsList"></ul>
+                        <button type="button" class="btn btn-primary add-item-btn" onclick="handleAddLabel()">
+                            <i class="bi bi-plus-circle"></i> Add Label
+                        </button>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="createdBy" class="form-label">Created By</label>
+                        <input type="text" class="form-control" id="createdBy" required>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Create MMR Version</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Templates for dynamic elements -->
+    <template id="ingredientTemplate">
+        <div class="list-group-item">
+            <div class="row">
+                <div class="col-md-4">
+                    <label class="form-label">Ingredient</label>
+                    <select class="form-select ingredient-select" required>
+                        <option value="">Search for an ingredient...</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Quantity</label>
+                    <input type="number" class="form-control ingredient-quantity" required step="0.01">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Unit</label>
+                    <select class="form-select unit-type" required>
+                        <option value="">Select unit...</option>
+                        <optgroup label="Weight">
+                            <option value="kg">Kilograms (kg)</option>
+                            <option value="g">Grams (g)</option>
+                            <option value="lb">Pounds (lb)</option>
+                            <option value="oz">Ounces (oz)</option>
+                        </optgroup>
+                        <optgroup label="Volume">
+                            <option value="L">Liters (L)</option>
+                            <option value="mL">Milliliters (mL)</option>
+                            <option value="gal">Gallons (gal)</option>
+                            <option value="fl oz">Fluid Ounces (fl oz)</option>
+                        </optgroup>
+                        <optgroup label="Count">
+                            <option value="units">Units</option>
+                            <option value="pieces">Pieces</option>
+                            <option value="count">Count</option>
+                        </optgroup>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">&nbsp;</label>
+                    <button type="button" class="btn btn-danger d-block w-100" onclick="this.closest('.list-group-item').remove()">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="stepTemplate">
+        <li class="list-group-item main-step">
+            <div class="row mb-3">
+                <div class="col-md-2">
+                    <label class="form-label">Step Number</label>
+                    <input type="number" class="form-control step-number" placeholder="Step #" required>
+                </div>
+                <div class="col-md-10">
+                    <label class="form-label">Title</label>
+                    <input type="text" class="form-control step-title" placeholder="Main Step Title" required>
+                </div>
+            </div>
+            <div class="row mb-2">
+                <div class="col">
+                    <div class="step-actions">
+                        <button type="button" class="btn btn-success" onclick="addSubStep(this)">
+                            <i class="bi bi-plus-circle"></i> Sub-step
+                        </button>
+                        <button type="button" class="btn btn-info" onclick="addQCStep(this)">
+                            <i class="bi bi-check-circle"></i> QC Check
+                        </button>
+                        <button type="button" class="btn btn-danger" onclick="this.closest('li.main-step').remove()">
+                            <i class="bi bi-trash"></i> Remove Step
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="sub-steps-container">
+                <!-- Sub-steps will be inserted here -->
+            </div>
+        </li>
+    </template>
+
+    <template id="subStepTemplate">
+        <div class="row sub-step">
+            <div class="col-md-2">
+                <label class="form-label">Sub-step #</label>
+                <input type="text" class="form-control substep-number" placeholder="1.1" required>
+            </div>
+            <div class="col-md-9">
+                <label class="form-label">Description</label>
+                <input type="text" class="form-control substep-description" placeholder="Sub-step description" required>
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button type="button" class="btn btn-sm btn-danger mb-3" onclick="this.closest('.sub-step').remove()">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <template id="qcStepTemplate">
+        <div class="row qc-step">
+            <div class="col-md-2 d-flex align-items-center">
+                <span class="form-control-plaintext text-center"><strong>QC Check</strong></span>
+            </div>
+            <div class="col-md-9">
+                <label class="form-label">Quality Control Description</label>
+                <input type="text" class="form-control qc-description" placeholder="Quality Control step description" required>
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button type="button" class="btn btn-sm btn-danger mb-3" onclick="this.closest('.qc-step').remove()">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <template id="equipmentTemplate">
+        <li class="list-group-item">
+            <div class="row align-items-center">
+                <div class="col-md-10">
+                    <label class="form-label small mb-1">Equipment Name</label>
+                    <input type="text" class="form-control form-control-sm" placeholder="Equipment name" required>
+                </div>
+                <div class="col-md-2 text-end">
+                    <button type="button" class="btn btn-danger btn-sm mt-3" onclick="this.closest('li').remove()">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </li>
+    </template>
+
+    <template id="packagingTemplate">
+        <div class="list-group-item">
+            <div class="row">
+                <div class="col-md-4">
+                    <label class="form-label">Packaging</label>
+                    <select class="form-select packaging-select" required>
+                        <option value="">Search for packaging...</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Quantity</label>
+                    <input type="number" class="form-control packaging-quantity" required step="1">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Unit</label>
+                    <select class="form-select unit-type" required>
+                        <option value="">Select unit...</option>
+                        <optgroup label="Count">
+                            <option value="units">Units</option>
+                            <option value="pieces">Pieces</option>
+                            <option value="boxes">Boxes</option>
+                            <option value="cases">Cases</option>
+                        </optgroup>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">&nbsp;</label>
+                    <button type="button" class="btn btn-danger d-block w-100" onclick="this.closest('.list-group-item').remove()">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="labelTemplate">
+        <div class="list-group-item">
+            <div class="row">
+                <div class="col-md-4">
+                    <label class="form-label">Label</label>
+                    <select class="form-select label-select" required>
+                        <option value="">Search for a label...</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Quantity</label>
+                    <input type="number" class="form-control label-quantity" required step="1">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Unit</label>
+                    <select class="form-select unit-type" required>
+                        <option value="">Select unit...</option>
+                        <optgroup label="Count">
+                            <option value="units">Units</option>
+                            <option value="pieces">Pieces</option>
+                            <option value="rolls">Rolls</option>
+                            <option value="sheets">Sheets</option>
+                        </optgroup>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">&nbsp;</label>
+                    <button type="button" class="btn btn-danger d-block w-100" onclick="this.closest('.list-group-item').remove()">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        // Ensure navbar links visibility is setup correctly
+        document.addEventListener('DOMContentLoaded', function() {
+            // This will ensure all navbar items are properly displayed based on user role
+            if (typeof setupPage === 'function') {
+                setupPage();
+            }
+        });
+    </script>
+</body>
+</html>

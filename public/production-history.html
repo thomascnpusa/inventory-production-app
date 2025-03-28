@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production History - Inventory & Production Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <style>
+        .modal-body {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .report-section {
+            margin-bottom: 20px;
+        }
+        .report-section h6 {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .report-section ul {
+            padding-left: 20px;
+        }
+        .qc-step {
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/production-history.html">History</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
+                    <li class="nav-item admin-only" style="display: none;">
+                        <a class="nav-link" href="/admin.html">Admin</a>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div id="alerts-container"></div>
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Production History</h5>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Product SKU</th>
+                                <th>Quantity</th>
+                                <th>Batch Number</th>
+                                <th>Completed Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for BPR Preview -->
+    <div class="modal fade" id="bprModal" tabindex="-1" aria-labelledby="bprModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="bprModalLabel">Batch Production Record</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="bprModalBody">
+                    <!-- Report content will be injected here -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary" id="downloadBprBtn">Download PDF</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="/js/auth.js"></script>
+    <script>
+        let currentReport = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Ensure navbar links visibility is setup correctly
+            if (typeof setupPage === 'function') {
+                setupPage();
+            }
+            
+            await loadHistory();
+        });
+
+        async function loadHistory() {
+            try {
+                const response = await authenticatedFetch('/api/v1/production-orders/status/Completed');
+                const orders = await response.json();
+                const tbody = document.getElementById('historyTableBody');
+                tbody.innerHTML = '';
+
+                orders.forEach(order => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${order.id}</td>
+                        <td>${order.product_sku}</td>
+                        <td>${order.quantity}</td>
+                        <td>${order.finished_batch_number}</td>
+                        <td>${order.completed_at ? new Date(order.completed_at).toLocaleString() : '-'}</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" onclick="viewReport(${order.id})">View BPR</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) {
+                showError('Failed to load production history');
+                console.error(error);
+            }
+        }
+
+        async function viewReport(orderId) {
+            try {
+                const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/report`);
+                const report = await response.json();
+                console.log('Report data:', report); // Debug log
+                currentReport = report;
+                displayBPR(report);
+            } catch (error) {
+                showError('Failed to load batch production record');
+                console.error(error);
+            }
+        }
+
+        function displayBPR(report) {
+            const modalBody = document.getElementById('bprModalBody');
+            modalBody.innerHTML = `
+                <div class="report-section">
+                    <h6>Identification Information</h6>
+                    <p><strong>Order ID:</strong> ${report.order_details.id}</p>
+                    <p><strong>Product Name:</strong> ${report.order_details.product_name}</p>
+                    <p><strong>Product SKU:</strong> ${report.order_details.product_sku}</p>
+                    <p><strong>Batch Number:</strong> ${report.order_details.batch_number}</p>
+                    <p><strong>Production Date:</strong> ${report.order_details.production_date ? new Date(report.order_details.production_date).toLocaleString() : 'N/A'}</p>
+                    <p><strong>Completion Date:</strong> ${report.order_details.completion_date ? new Date(report.order_details.completion_date).toLocaleString() : 'N/A'}</p>
+                </div>
+
+                <div class="report-section">
+                    <h6>Raw Materials Used</h6>
+                    <ul>
+                        ${report.batches_used.filter(b => b.item_type === 'raw_ingredient').map((batch, i) => `
+                            <li>${i + 1}. ${batch.name} (${batch.sku}) - ${batch.quantity_used} ${batch.unit_type}<br>
+                                Batch: ${batch.batch_number}, Supplier: ${batch.supplier_name}
+                            </li>
+                        `).join('')}
+                    </ul>
+                </div>
+
+                <div class="report-section">
+                    <h6>Production Details</h6>
+                    <p><strong>Quantity Produced:</strong> ${report.production_details.quantity_produced} units</p>
+                    <p><strong>Equipment Used:</strong> ${report.production_details.equipment_used.join(', ')}</p>
+                    <h6>Steps:</h6>
+                    <ul>
+                        ${report.production_details.steps.map(step => `
+                            <li>Step ${step.step_number}: ${step.description}<br>
+                                Completed by: ${step.completed_by} at ${new Date(step.completed_at).toLocaleString()}
+                                ${step.sub_steps && step.sub_steps.length > 0 ? `
+                                    <h6>Sub-Steps:</h6>
+                                    <ul>
+                                        ${step.sub_steps.map(sub => `
+                                            <li class="${sub.step_type === 'qc' ? 'qc-step' : ''}">
+                                                ${sub.sub_step_number}: ${sub.description}<br>
+                                                ${sub.step_type === 'qc' ? `Status: ${sub.completed ? 'Pass' : 'Pending'}` : ''}
+                                            </li>
+                                        `).join('')}
+                                    </ul>
+                                ` : ''}
+                            </li>
+                        `).join('')}
+                    </ul>
+                </div>
+
+                <div class="report-section">
+                    <h6>Yield Data</h6>
+                    <p><strong>Total Good Units:</strong> ${report.yield_data.total_good_units}</p>
+                    <p><strong>Rejected Units:</strong> ${report.yield_data.rejected_units}</p>
+                    <p><strong>Yield Percentage:</strong> ${report.yield_data.yield_percentage}%</p>
+                </div>
+            `;
+
+            const modal = new bootstrap.Modal(document.getElementById('bprModal'));
+            modal.show();
+
+            document.getElementById('downloadBprBtn').onclick = () => generateBPR(report);
+        }
+
+        function generateBPR(report) {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const pageHeight = doc.internal.pageSize.getHeight();
+            const margin = 15;
+            const maxWidth = pageWidth - 2 * margin;
+            let y = margin;
+
+            // Helper function to add text with wrapping and page breaks
+            function addText(text, x, y, options = {}) {
+                const fontSize = options.fontSize || doc.getFontSize();
+                doc.setFontSize(fontSize);
+                
+                if (options.bold) {
+                    doc.setFont("helvetica", "bold");
+                } else {
+                    doc.setFont("helvetica", "normal");
+                }
+                
+                const lines = doc.splitTextToSize(text, maxWidth);
+                
+                if (options.align === 'center') {
+                    x = pageWidth / 2;
+                }
+                
+                lines.forEach(line => {
+                    if (y > pageHeight - margin) {
+                        doc.addPage();
+                        y = margin;
+                    }
+                    doc.text(line, x, y, options);
+                    y += fontSize * 0.4;
+                });
+                
+                return y + (options.addSpace ? 3 : 1);
+            }
+
+            // Helper function to add a divider
+            function addDivider(yPos) {
+                doc.setDrawColor(200, 200, 200);
+                doc.setLineWidth(0.5);
+                doc.line(margin, yPos, pageWidth - margin, yPos);
+                return yPos + 3;
+            }
+
+            // Title and header
+            y = margin;
+            y = addText('Batch Production Record', pageWidth / 2, y, { align: 'center', fontSize: 14, bold: true });
+            y = addDivider(y);
+
+            // Identification Info - 2 column layout
+            const colWidth = (maxWidth - 5) / 2;
+            y = addText('Identification Information', margin, y, { fontSize: 11, bold: true });
+            
+            const leftCol = margin;
+            const rightCol = margin + colWidth + 5;
+            let leftY = y;
+            let rightY = y;
+            
+            leftY = addText(`Order ID: ${report.order_details.id}`, leftCol, leftY, { fontSize: 9 });
+            leftY = addText(`Product Name: ${report.order_details.product_name}`, leftCol, leftY, { fontSize: 9 });
+            leftY = addText(`Product SKU: ${report.order_details.product_sku}`, leftCol, leftY, { fontSize: 9 });
+            
+            rightY = addText(`Batch Number: ${report.order_details.batch_number}`, rightCol, rightY, { fontSize: 9 });
+            rightY = addText(`Production Date: ${report.order_details.production_date ? new Date(report.order_details.production_date).toLocaleDateString() : 'N/A'}`, rightCol, rightY, { fontSize: 9 });
+            rightY = addText(`Completion Date: ${report.order_details.completion_date ? new Date(report.order_details.completion_date).toLocaleDateString() : 'N/A'}`, rightCol, rightY, { fontSize: 9 });
+            
+            y = Math.max(leftY, rightY);
+            y = addDivider(y);
+
+            // Raw Materials Used
+            y = addText('Raw Materials Used', margin, y, { fontSize: 11, bold: true });
+            const ingredients = report.batches_used.filter(b => b.item_type === 'raw_ingredient');
+            if (ingredients.length === 0) {
+                y = addText('No raw materials recorded', margin + 2, y, { fontSize: 9 });
+            } else {
+                ingredients.forEach((batch, i) => {
+                    y = addText(`${i + 1}. ${batch.name} (${batch.sku}) - ${batch.quantity_used} ${batch.unit_type}`, margin + 2, y, { fontSize: 9 });
+                    y = addText(`   Batch: ${batch.batch_number}, Supplier: ${batch.supplier_name}`, margin + 5, y, { fontSize: 9, addSpace: true });
+                });
+            }
+        }
+    </script>
+</body>
+</html>

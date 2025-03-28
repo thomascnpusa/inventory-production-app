@@ -1,0 +1,565 @@
+/* Main CSS - Consistent styling across all pages */
+
+/* Reset and base styles */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 14px;
+}
+
+/* Variables */
+:root {
+    /* Colors */
+    --primary-color: #2d864f; /* Shopify-like teal/green */
+    --secondary-color: #6b7280; /* Softer gray for secondary elements */
+    --success-color: #2d864f; /* Match primary for consistency */
+    --danger-color: #dc2626; /* Brighter red for visibility */
+    --warning-color: #f59e0b; /* Softer amber for warnings */
+    --info-color: #0ea5e9; /* Brighter blue for info */
+    --light-color: #f1f5f9; /* Lighter gray for backgrounds */
+    --dark-color: #1f2a44; /* Darker for text and headings */
+    --border-color: #e5e7eb; /* Lighter gray for borders */
+    
+    /* Backgrounds */
+    --body-bg: #f5f7fa; /* Lighter background for the body */
+    --card-bg: #ffffff; /* White cards for contrast */
+    
+    /* Typography */
+    --text-color: #374151; /* Softer dark gray for body text */
+    --text-muted: #6b7280; /* Muted text for secondary info */
+    --heading-color: #1f2a44; /* Darker for headings */
+    
+    /* Spacing */
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 1.25rem;
+    --spacing-lg: 2rem;
+    --spacing-xl: 2.5rem;
+    
+    /* Container */
+    --container-max-width: 1200px;
+    
+    /* Border radius */
+    --border-radius: 0.5rem;
+    
+    /* Box shadow */
+    --box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Softer shadow */
+}
+
+/* Body */
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.6;
+    color: var(--text-color);
+    background-color: var(--body-bg);
+}
+
+/* Container */
+.container {
+    max-width: var(--container-max-width);
+    margin: 0 auto;
+    padding: 0 var(--spacing-md);
+}
+
+/* Typography */
+h1 { font-size: 2rem; }    /* 28px */
+h2 { font-size: 1.5rem; }  /* 21px */
+h3 { font-size: 1.25rem; } /* 17.5px */
+h4 { font-size: 1rem; }    /* 14px */
+h5 { font-size: 0.875rem; }/* 12.25px */
+h6 { font-size: 0.75rem; } /* 10.5px */
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--heading-color);
+    margin-bottom: var(--spacing-md);
+    font-weight: 700; /* Bolder for emphasis */
+}
+
+h1 {
+    margin-bottom: var(--spacing-xl);
+    text-align: center;
+}
+
+/* Sections */
+.section {
+    background: var(--card-bg);
+    border-radius: var(--border-radius);
+    padding: var(--spacing-lg);
+    margin-bottom: var(--spacing-xl);
+    box-shadow: var(--box-shadow);
+    border: 1px solid var(--border-color);
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 2rem;
+    box-shadow: var(--box-shadow);
+}
+
+.card-header {
+    background-color: var(--light-color);
+    border-bottom: 1px solid var(--border-color);
+    padding: var(--spacing-md);
+    font-weight: 600;
+    color: var(--heading-color);
+}
+
+.card-body {
+    padding: 1.5rem;
+}
+
+/* Forms */
+.form-control {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db; /* Lighter border */
+    border-radius: var(--border-radius);
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.875rem;
+    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(45, 134, 79, 0.25); /* Match primary color */
+    outline: none;
+}
+
+.form-group, .form-section {
+    margin-bottom: var(--spacing-md);
+}
+
+.form-section {
+    padding: var(--spacing-md);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background-color: var(--card-bg);
+    box-shadow: var(--box-shadow);
+}
+
+label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--heading-color);
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    font-weight: 500;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    user-select: none;
+    border: 1px solid transparent;
+    padding: 0.5rem 1rem; /* Adjusted for consistency */
+    font-size: 0.875rem; /* Smaller text */
+    line-height: 1.5;
+    border-radius: var(--border-radius);
+    transition: all 0.2s ease-in-out;
+    cursor: pointer;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #256d41; /* Darker shade */
+    border-color: #256d41;
+    opacity: 0.9;
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #5b616e; /* Darker shade */
+    border-color: #5b616e;
+}
+
+.btn-success {
+    background-color: var(--success-color);
+    border-color: var(--success-color);
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #256d41; /* Match primary hover */
+    border-color: #256d41;
+}
+
+.btn-danger {
+    background-color: var(--danger-color);
+    border-color: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #b91c1c; /* Darker red */
+    border-color: #b91c1c;
+}
+
+.btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem; /* Even smaller for small buttons */
+}
+
+.btn-outline-success {
+    color: var(--success-color);
+    border-color: var(--success-color);
+    background-color: transparent;
+}
+
+.btn-outline-success:hover {
+    color: white;
+    background-color: var(--success-color);
+}
+
+/* Alerts */
+.alert {
+    position: relative;
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+    border: 1px solid transparent;
+    border-radius: var(--border-radius);
+}
+
+.alert-success {
+    color: #14532d; /* Darker green for contrast */
+    background-color: #ecfdf5; /* Lighter green background */
+    border-color: #d1fae5;
+}
+
+.alert-danger {
+    color: #991b1b; /* Darker red for contrast */
+    background-color: #fef2f2; /* Lighter red background */
+    border-color: #fee2e2;
+}
+
+/* Lists */
+.list-group {
+    display: flex;
+    flex-direction: column;
+    padding-left: 0;
+    margin-bottom: 0;
+    border-radius: var(--border-radius);
+}
+
+.list-group-item {
+    position: relative;
+    display: block;
+    padding: 1rem; /* Adjusted for consistency */
+    background-color: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 0.5rem; /* Small gap between items */
+}
+
+.list-group-item:first-child {
+    border-top-left-radius: var(--border-radius);
+    border-top-right-radius: var(--border-radius);
+}
+
+.list-group-item:last-child {
+    border-bottom-left-radius: var(--border-radius);
+    border-bottom-right-radius: var(--border-radius);
+}
+
+.list-group-item-success {
+    color: #14532d;
+    background-color: #ecfdf5;
+}
+
+/* Dynamic Lists */
+.dynamic-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.dynamic-list li {
+    display: flex;
+    align-items: center;
+    margin-bottom: var(--spacing-xs);
+    padding: var(--spacing-sm);
+    background-color: var(--light-color);
+    border-radius: var(--border-radius);
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 0.25em 0.5em; /* Slightly more padding */
+    font-size: 0.75em;
+    font-weight: 600;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.375rem; /* Slightly larger radius */
+}
+
+.badge-success {
+    color: #fff;
+    background-color: var(--success-color);
+}
+
+.badge-warning {
+    color: #78350f; /* Darker for contrast */
+    background-color: #fef3c7; /* Lighter amber */
+}
+
+.badge-danger {
+    color: #fff;
+    background-color: var(--danger-color);
+}
+
+.badge-info {
+    color: #fff;
+    background-color: var(--info-color);
+}
+
+/* Tables */
+.table {
+    width: 100%;
+    margin-bottom: 1rem;
+    color: var(--text-color);
+    border-collapse: collapse;
+    background-color: var(--card-bg);
+}
+
+.table th,
+.table td {
+    padding: 0.75rem;
+    vertical-align: middle;
+    border-top: 1px solid var(--border-color);
+}
+
+.table thead th {
+    vertical-align: bottom;
+    border-bottom: 2px solid var(--border-color);
+    background-color: var(--light-color);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+
+/* Batches accordion styling */
+.batches-row {
+    transition: all 0.3s ease;
+}
+
+.batch-toggle-btn {
+    width: 100%;
+    text-align: left;
+    transition: all 0.3s ease;
+}
+
+.batch-toggle-btn:hover {
+    background-color: var(--light-color);
+}
+
+.batch-toggle-btn i {
+    transition: transform 0.3s ease;
+}
+
+.batches-container {
+    border-radius: 0.25rem;
+    box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.1);
+    overflow-x: auto; /* Add horizontal scrolling for small screens */
+}
+
+.batches-container h6 {
+    color: var(--primary-color);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+    position: sticky;
+    left: 0;
+    background-color: var(--light-color);
+}
+
+.batches-container table {
+    margin-bottom: 0;
+    min-width: 800px; /* Ensure table doesn't get too compressed */
+}
+
+.batches-container thead th {
+    background-color: rgba(0, 0, 0, 0.03);
+    font-size: 0.75rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.batches-container tbody td {
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    vertical-align: middle;
+}
+
+/* Add some visual distinction to batches */
+.batches-container tbody tr:nth-child(odd) {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.batches-container tbody tr:hover {
+    background-color: rgba(45, 134, 79, 0.05);
+}
+
+/* Progress */
+.progress {
+    display: flex;
+    height: 1rem;
+    overflow: hidden;
+    font-size: 0.75rem;
+    background-color: #e9ecef;
+    border-radius: 0.25rem;
+    margin-bottom: 1rem;
+}
+
+.progress-bar {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    color: #fff;
+    text-align: center;
+    white-space: nowrap;
+    background-color: var(--primary-color);
+    transition: width 0.6s ease;
+}
+
+/* Responsive utilities */
+@media (max-width: 768px) {
+    .container {
+        padding: 0 var(--spacing-sm);
+    }
+    
+    .card-header, .card-body {
+        padding: var(--spacing-sm);
+    }
+}
+
+/* Special components */
+.step-card {
+    transition: all 0.3s ease;
+}
+
+.step-card.completed {
+    border-color: var(--success-color);
+    background-color: #f8fff9;
+}
+
+.step-card.current {
+    border-color: var(--primary-color);
+    background-color: #f0f9ff;
+}
+
+.quality-check {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+}
+
+.quality-check i {
+    font-size: 1.2rem;
+}
+
+.quality-check.completed i {
+    color: var(--success-color);
+}
+
+.quality-check.pending i {
+    color: var(--secondary-color);
+}
+
+.version-list {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.version-card {
+    margin-bottom: var(--spacing-md);
+    transition: all 0.3s ease;
+}
+
+.version-card:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Softer hover shadow */
+}
+
+/* Nav Tabs */
+.nav-tabs {
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: var(--spacing-lg);
+}
+
+.nav-tabs .tab-link {
+    color: var(--dark-color);
+    font-weight: 500;
+    background-color: var(--light-color);
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+    border-radius: var(--border-radius) var(--border-radius) 0 0;
+    padding: var(--spacing-sm) var(--spacing-lg);
+    margin-right: var(--spacing-xs);
+    transition: all 0.2s ease;
+}
+
+.nav-tabs .tab-link:hover {
+    color: var(--primary-color);
+    background-color: #ffffff;
+    border-color: var(--primary-color) var(--primary-color) transparent;
+}
+
+.nav-tabs .tab-link.active {
+    color: var(--dark-color);
+    background-color: white;
+    border-color: var(--primary-color) var(--primary-color) white;
+    font-weight: 600;
+    position: relative;
+}
+
+.nav-tabs .tab-link.active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: white;
+}
+
+/* Specific styling for inventory tabs */
+#mainTabs .nav-link {
+    color: var(--dark-color) !important;
+}
+
+#mainTabs .nav-link.active {
+    color: var(--dark-color) !important;
+    background-color: white;
+    border-color: var(--primary-color) var(--primary-color) white;
+}
+
+#mainTabs .nav-link:hover {
+    color: var(--primary-color) !important;
+}
+
+.pagination { margin-top: 20px; justify-content: center; }
