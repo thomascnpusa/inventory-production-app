@@ -200,8 +200,15 @@ CREATE TABLE ProductionOrders (
   finished_batch_number VARCHAR(50),  -- Batch number assigned to finished goods
   mmr_product_sku VARCHAR(50) NOT NULL,  -- Reference to MMR product_sku
   mmr_version INT NOT NULL,              -- Reference to MMR version
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Track when records are updated
   FOREIGN KEY (mmr_product_sku, mmr_version) REFERENCES MMRs(product_sku, version)
 );
+
+-- Add trigger to update updated_at column for ProductionOrders
+CREATE TRIGGER update_productionorders_updated_at
+    BEFORE UPDATE ON ProductionOrders
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
 
 -- Production Batches (tracks raw materials, packaging, and labels used in production)
 CREATE TABLE ProductionBatches (
