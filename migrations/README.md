@@ -11,4 +11,5 @@ This directory contains SQL migration files for database schema changes.
 
 ## Recent Migrations
 
-- `add_updated_at_to_productionorders.sql` - Adds the missing `updated_at` column to the productionorders table 
+- `add_updated_at_to_productionorders.sql` - Adds the missing `updated_at` column to the productionorders table
+- `productionorders_table_complete_structure.sql` - Documents the complete structure of the productionorders table as it exists in the database 

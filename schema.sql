@@ -200,6 +200,11 @@ CREATE TABLE ProductionOrders (
   finished_batch_number VARCHAR(50),  -- Batch number assigned to finished goods
   mmr_product_sku VARCHAR(50) NOT NULL,  -- Reference to MMR product_sku
   mmr_version INT NOT NULL,              -- Reference to MMR version
+  mmr_base_quantity NUMERIC DEFAULT 1,  -- Base quantity for MMR scaling
+  due_date DATE,                        -- Due date for the production order
+  completed_at TIMESTAMP,               -- When the order was completed
+  actual_yield NUMERIC,                 -- Actual yield of the production
+  completed_by VARCHAR(50),             -- Who completed the production order
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- Track when records are updated
   FOREIGN KEY (mmr_product_sku, mmr_version) REFERENCES MMRs(product_sku, version)
 );
