@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production Order Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        label {
+            display: block;
+            margin-top: 10px;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            margin-top: 5px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Production Order Test</h1>
+    
+    <form id="testForm">
+        <div>
+            <label for="mmr_product_sku">Product SKU:</label>
+            <input type="text" id="mmr_product_sku" name="mmr_product_sku" value="P-15031" required>
+        </div>
+        
+        <div>
+            <label for="mmr_version">MMR Version:</label>
+            <input type="number" id="mmr_version" name="mmr_version" value="1" required>
+        </div>
+        
+        <div>
+            <label for="quantity">Quantity:</label>
+            <input type="number" id="quantity" name="quantity" value="100" required>
+        </div>
+        
+        <div>
+            <label for="force">Force (ignore inventory warnings):</label>
+            <select id="force" name="force">
+                <option value="false">No</option>
+                <option value="true">Yes</option>
+            </select>
+        </div>
+        
+        <button type="button" id="testDebugBtn">Test Debug Endpoint</button>
+        <button type="button" id="testCreateBtn">Test Create Production Order</button>
+    </form>
+    
+    <h2>Results:</h2>
+    <div id="result"></div>
+    
+    <script>
+        // Get auth token from localStorage or redirect to login
+        function getAuthToken() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                alert('No authentication token found. Please log in first.');
+                return null;
+            }
+            return token;
+        }
+        
+        // Make authenticated fetch request
+        async function authenticatedFetch(url, options = {}) {
+            const token = getAuthToken();
+            if (!token) return null;
+            
+            const headers = options.headers || {};
+            headers['Authorization'] = `Bearer ${token}`;
+            
+            return fetch(url, {
+                ...options,
+                headers
+            });
+        }
+        
+        // Display results
+        function displayResult(title, data, isError = false) {
+            const resultElement = document.getElementById('result');
+            resultElement.innerHTML = `
+                <h3 class="${isError ? 'error' : 'success'}">${title}</h3>
+                <pre>${typeof data === 'string' ? data : JSON.stringify(data, null, 2)}</pre>
+            `;
+        }
+        
+        // Get form values
+        function getFormValues() {
+            return {
+                mmr_product_sku: document.getElementById('mmr_product_sku').value,
+                mmr_version: parseInt(document.getElementById('mmr_version').value),
+                quantity: parseInt(document.getElementById('quantity').value),
+                force: document.getElementById('force').value === 'true'
+            };
+        }
+        
+        // Test debug endpoint
+        document.getElementById('testDebugBtn').addEventListener('click', async () => {
+            const formData = getFormValues();
+            const testDebugBtn = document.getElementById('testDebugBtn');
+            const originalText = testDebugBtn.textContent;
+            
+            try {
+                testDebugBtn.innerHTML = '<span class="spinner"></span> Testing...';
+                testDebugBtn.disabled = true;
+                
+                console.log('Calling debug endpoint with:', formData);
+                const response = await authenticatedFetch('/api/production-orders/debug', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                console.log('Debug endpoint response:', data);
+                
+                if (!response.ok) {
+                    throw new Error(`Debug endpoint failed: ${response.status} ${response.statusText}`);
+                }
+                
+                displayResult('Debug Endpoint Success', data);
+            } catch (error) {
+                console.error('Debug endpoint error:', error);
+                displayResult('Debug Endpoint Error', error.message, true);
+            } finally {
+                testDebugBtn.innerHTML = originalText;
+                testDebugBtn.disabled = false;
+            }
+        });
+        
+        // Test create production order
+        document.getElementById('testCreateBtn').addEventListener('click', async () => {
+            const formData = getFormValues();
+            const testCreateBtn = document.getElementById('testCreateBtn');
+            const originalText = testCreateBtn.textContent;
+            
+            try {
+                testCreateBtn.innerHTML = '<span class="spinner"></span> Creating...';
+                testCreateBtn.disabled = true;
+                
+                console.log('Creating production order with:', formData);
+                const response = await authenticatedFetch('/api/production-orders', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                console.log('Create endpoint response:', data);
+                
+                if (!response.ok) {
+                    if (response.status === 409 && data.code === 'INSUFFICIENT_INVENTORY') {
+                        displayResult('Insufficient Inventory Warning', data, true);
+                    } else {
+                        throw new Error(`Create failed: ${response.status} ${response.statusText} - ${data.message || 'Unknown error'}`);
+                    }
+                } else {
+                    displayResult('Create Success', data);
+                }
+            } catch (error) {
+                console.error('Create endpoint error:', error);
+                displayResult('Create Error', error.message, true);
+            } finally {
+                testCreateBtn.innerHTML = originalText;
+                testCreateBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html> 

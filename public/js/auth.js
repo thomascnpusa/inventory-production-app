@@ -89,19 +89,25 @@ function addAuthHeader(options = {}) {
         return null;
     }
 
-    const defaultOptions = {
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        }
+    // Base headers required for authentication
+    const baseHeaders = {
+        'Authorization': `Bearer ${token}`
     };
 
+    // Check if the body is FormData. If so, DO NOT set Content-Type.
+    // The browser will set it automatically with the correct boundary.
+    const isFormData = options.body instanceof FormData;
+
+    const defaultHeaders = isFormData 
+        ? {} // Let browser set Content-Type for FormData
+        : { 'Content-Type': 'application/json' }; // Default to JSON for others
+
     const mergedOptions = {
-        ...defaultOptions,
-        ...options,
+        ...options, // Spread incoming options first
         headers: {
-            ...defaultOptions.headers,
-            ...options.headers
+            ...defaultHeaders,
+            ...baseHeaders, // Ensure Auth header is always present
+            ...options.headers // Allow overriding other headers
         }
     };
     console.log('Auth headers added:', mergedOptions.headers);
@@ -141,6 +147,14 @@ async function authenticatedFetch(url, options = {}) {
             localStorage.removeItem('user');
             window.location.href = '/login.html';
             return null;
+        }
+
+        // Special handling for 409 Conflict status
+        // We'll return the response rather than throwing an error
+        // since 409 may be handled in a custom way (like inventory warnings)
+        if (response.status === 409) {
+            console.log('Received 409 Conflict response - returning for custom handling');
+            return response;
         }
 
         if (!response.ok) {

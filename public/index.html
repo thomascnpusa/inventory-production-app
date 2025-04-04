@@ -11,6 +11,103 @@
     <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet">
     <link href="/css/navbar.css" rel="stylesheet">
     <link href="/css/main.css" rel="stylesheet">
+    
+    <!-- JavaScript Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/inventory.js"></script>
+    <script src="/js/fba-transfers.js"></script>
+
+    <!-- Custom Styles -->
+    <style>
+        .dialog {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .dialog-content {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            max-width: 80%;
+            max-height: 80%;
+            overflow-y: auto;
+        }
+
+        .dialog h2 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        .error-message,
+        .dialog-message {
+            white-space: pre-wrap;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+
+        .dialog-buttons {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 4px;
+            color: white;
+            z-index: 1000;
+            animation: fadeInOut 3s ease-in-out;
+        }
+
+        .toast.success {
+            background: #4CAF50;
+        }
+
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translateY(20px); }
+            10% { opacity: 1; transform: translateY(0); }
+            90% { opacity: 1; transform: translateY(0); }
+            100% { opacity: 0; transform: translateY(-20px); }
+        }
+
+        .error-message, .confirm-message {
+            white-space: pre-wrap;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 0;
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1050;
+        }
+        .toast.success .toast-header {
+            background-color: #28a745;
+            color: white;
+        }
+    </style>
 </head>
 <body>
     <!-- Alerts container -->
@@ -25,13 +122,28 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link active" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <!-- Production Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="/admin.html">Admin</a>
+                    <!-- Admin Dropdown -->
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">
@@ -64,6 +176,11 @@
                     Production Orders
                 </button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link tab-link" id="fba-transfers-tab" data-bs-toggle="tab" data-bs-target="#fba-transfers" type="button" role="tab">
+                    FBA Transfers
+                </button>
+            </li>
         </ul>
 
         <div class="tab-content" id="mainTabsContent">
@@ -75,8 +192,11 @@
                         <button class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addItemModal">
                             <i class="bi bi-plus-circle"></i> Add New Item
                         </button>
-                        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#receiveShipmentModal">
+                        <button class="btn btn-success me-2" data-bs-toggle="modal" data-bs-target="#receiveShipmentModal">
                             <i class="bi bi-box-seam"></i> Receive Shipment
+                        </button>
+                        <button id="sync-fba-button" class="btn btn-info">
+                            <i class="bi bi-sync"></i> Sync FBA Inventory
                         </button>
                     </div>
                 </div>
@@ -97,16 +217,33 @@
                             <option value="label">Label</option>
                         </select>
                     </div>
+                    <div class="col-md-5">
+                        <div class="d-flex justify-content-end align-items-center">
+                            <div class="me-3">
+                                <label for="inventoryPageSizeTop" class="form-label me-2">Items per page:</label>
+                                <select id="inventoryPageSizeTop" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                                    <option value="50" selected>50</option>
+                                    <option value="100">100</option>
+                                    <option value="250">250</option>
+                                </select>
+                            </div>
+                            <nav aria-label="Inventory pagination top">
+                                <ul class="pagination pagination-sm mb-0" id="inventoryPaginationControlsTop"></ul>
+                            </nav>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="table-responsive">
-                    <table class="table table-striped table-hover">
+                    <table class="table table-striped table-hover" id="inventory-table">
                         <thead>
                             <tr>
                                 <th class="sortable" data-sort="sku" style="cursor: pointer">SKU <i class="bi bi-arrow-down"></i></th>
                                 <th class="sortable" data-sort="name" style="cursor: pointer">Name <i class="bi bi-arrow-down"></i></th>
                                 <th class="sortable" data-sort="type" style="cursor: pointer">Type <i class="bi bi-arrow-down"></i></th>
-                                <th class="sortable" data-sort="total_stock" style="cursor: pointer">Total Stock <i class="bi bi-arrow-down"></i></th>
+                                <th class="sortable" data-sort="total_stock" style="cursor: pointer">Warehouse Stock <i class="bi bi-arrow-down"></i></th>
+                                <th class="sortable" data-sort="fba_inventory" style="cursor: pointer">FBA Inventory <i class="bi bi-arrow-down"></i></th>
+                                <th class="sortable" data-sort="total_available" style="cursor: pointer">Total Available <i class="bi bi-arrow-down"></i></th>
                                 <th class="sortable" data-sort="minimum_quantity" style="cursor: pointer">Min. Qty <i class="bi bi-arrow-down"></i></th>
                                 <th class="sortable" data-sort="unit_type" style="cursor: pointer">Unit Type <i class="bi bi-arrow-down"></i></th>
                                 <th>Batches</th>
@@ -117,6 +254,21 @@
                             <!-- Inventory items will be populated here -->
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Pagination Controls for Inventory -->
+                <div class="d-flex justify-content-between align-items-center mt-3 mb-5">
+                    <div>
+                        <label for="inventoryPageSize" class="form-label me-2">Items per page:</label>
+                        <select id="inventoryPageSize" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="250">250</option>
+                        </select>
+                    </div>
+                    <nav aria-label="Inventory pagination">
+                        <ul class="pagination mb-0" id="inventoryPaginationControls"></ul>
+                    </nav>
                 </div>
             </div>
 
@@ -151,7 +303,133 @@
                     <ul class="pagination" id="paginationControls"></ul>
                 </nav>
             </div>
+            
+            <!-- FBA Transfers Tab -->
+            <div class="tab-pane fade" id="fba-transfers" role="tabpanel">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h2>FBA Transfers</h2>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTransferModal">
+                        <i class="bi bi-box-arrow-right"></i> Create FBA Transfer
+                    </button>
+                </div>
+                
+                <!-- Transfer filters and search -->
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="transferSearch" placeholder="Search transfers...">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select" id="transferStatusFilter">
+                            <option value="">All Statuses</option>
+                            <option value="in_transit">In Transit</option>
+                            <option value="confirmed">Confirmed</option>
+                            <option value="reconciled">Reconciled</option>
+                            <option value="error">Error</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Transfers table -->
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover" id="transfers-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th>Product Name</th>
+                                <th>Quantity</th>
+                                <th>Transfer Date</th>
+                                <th>Status</th>
+                                <th>Shipment ID</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transfersTableBody">
+                            <!-- Transfers will be populated here -->
+                            <tr>
+                                <td colspan="7" class="text-center">No FBA transfers found</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Pagination for transfers table -->
+                <nav aria-label="Transfers pagination">
+                    <ul class="pagination" id="transferPaginationControls"></ul>
+                </nav>
+            </div>
         </div>
+
+        <!-- FBA Inventory Dashboard (Hidden) -->
+        <!--
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Amazon FBA Inventory</h5>
+                        <div>
+                            <a href="/amazon-mapping.html" class="btn btn-sm btn-outline-primary">View All</a>
+                            <button id="refresh-fba" class="btn btn-sm btn-outline-secondary ms-2">
+                                <i class="bi bi-arrow-repeat"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-body text-center">
+                                        <h6 class="text-muted">Total FBA Products</h6>
+                                        <h2 id="fba-total-products">-</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-body text-center">
+                                        <h6 class="text-muted">Total FBA Inventory</h6>
+                                        <h2 id="fba-total-inventory">-</h2>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card mb-3">
+                                    <div class="card-body text-center">
+                                        <h6 class="text-muted">Unfulfillable Units</h6>
+                                        <h2 id="fba-unfulfillable" class="text-danger">-</h2>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-4">
+                            <h6>Low Stock Warning <span class="badge bg-warning ms-2">Less than 20 available</span></h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>SKU</th>
+                                            <th>Name</th>
+                                            <th>Available</th>
+                                            <th>Total</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="fba-low-stock">
+                                        <tr>
+                                            <td colspan="5" class="text-center">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        -->
     </div>
 
     <!-- Add Item Modal -->
@@ -274,7 +552,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="createOrderBtn" onclick="createProductionOrder()">
+                    <button type="button" class="btn btn-primary" id="createOrderBtn" onclick="handleCreateProductionOrder()">
                         <span id="createOrderSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
                         Create Order
                     </button>
@@ -379,18 +657,67 @@
         </div>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
-    <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="/js/auth.js"></script>
+    <!-- Add Transfer Modal -->
+    <div class="modal fade" id="addTransferModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Create FBA Transfer</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addTransferForm">
+                        <div class="mb-3">
+                            <label for="transferSku" class="form-label">Product SKU</label>
+                            <select class="form-select" id="transferSku" required>
+                                <option value="">Select a product</option>
+                                <!-- Will be populated with SKUs that have Amazon mappings -->
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="transferQuantity" class="form-label">Quantity to Transfer</label>
+                            <input type="number" class="form-control" id="transferQuantity" required min="1">
+                            <div class="form-text">
+                                Available warehouse stock: <span id="availableStock">-</span>
+                            </div>
+                            <div class="form-text">
+                                Amazon SKU mapping: <span id="amazonSkuMapping">-</span>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="shipmentId" class="form-label">Amazon Shipment ID</label>
+                            <input type="text" class="form-control" id="shipmentId">
+                        </div>
+                        <div class="mb-3">
+                            <label for="trackingNumber" class="form-label">Tracking Number</label>
+                            <input type="text" class="form-control" id="trackingNumber">
+                        </div>
+                        <div class="mb-3">
+                            <label for="transferNotes" class="form-label">Notes</label>
+                            <textarea class="form-control" id="transferNotes" rows="3"></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="createTransferBtn">
+                        <span id="createTransferSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                        Create Transfer
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
 // Global variables for inventory filtering and sorting
 let inventorySort = { field: 'sku', direction: 'asc' };
     let inventorySearchTerm = '';
     let inventoryTypeFilter = '';
+    
+    // Add global variables for inventory pagination
+    let inventoryCurrentPage = 1;
+    let inventoryPageSize = 50; // Default page size
     
     // Global variables for production orders sorting and pagination
     let currentSort = { field: 'id', direction: 'desc' };
@@ -438,6 +765,7 @@ let inventorySort = { field: 'sku', direction: 'asc' };
         if (inventorySearch) {
             inventorySearch.addEventListener('input', (e) => {
                 inventorySearchTerm = e.target.value.toLowerCase();
+                inventoryCurrentPage = 1; // Reset page on new search
                 loadInventoryItems();
             });
         }
@@ -445,6 +773,7 @@ let inventorySort = { field: 'sku', direction: 'asc' };
         if (typeFilter) {
             typeFilter.addEventListener('change', (e) => {
                 inventoryTypeFilter = e.target.value.toLowerCase();
+                inventoryCurrentPage = 1; // Reset page on filter change
                 loadInventoryItems();
             });
         }
@@ -460,9 +789,31 @@ let inventorySort = { field: 'sku', direction: 'asc' };
                     inventorySort.direction = 'asc';
                 }
                 updateInventorySortIcons();
+                inventoryCurrentPage = 1; // Reset page on sort change
                 loadInventoryItems();
             });
         });
+
+        // Add event listener for inventory page size change
+        const inventoryPageSizeSelect = document.getElementById('inventoryPageSize');
+        if (inventoryPageSizeSelect) {
+            inventoryPageSizeSelect.addEventListener('change', (e) => {
+                inventoryPageSize = parseInt(e.target.value);
+                inventoryCurrentPage = 1; // Reset to first page when size changes
+                loadInventoryItems();
+            });
+        }
+
+        // Add event listener for top inventory page size change
+        const inventoryPageSizeTopSelect = document.getElementById('inventoryPageSizeTop');
+        if (inventoryPageSizeTopSelect) {
+            inventoryPageSizeTopSelect.addEventListener('change', (e) => {
+                inventoryPageSize = parseInt(e.target.value);
+                document.getElementById('inventoryPageSize').value = e.target.value; // Keep bottom select in sync
+                inventoryCurrentPage = 1; // Reset to first page when size changes
+                loadInventoryItems();
+            });
+        }
 
         // Add event listeners for production sorting
         document.querySelectorAll('#production th.sortable').forEach(th => {
@@ -514,42 +865,73 @@ let inventorySort = { field: 'sku', direction: 'asc' };
         document.getElementById('usernameDisplay').textContent = user.username;
     }
 
-    // Load inventory items (unchanged)
-    async function loadInventoryItems() {
+    // Load inventory items with pagination, filtering, and sorting
+    async function loadInventoryItems(page = inventoryCurrentPage, limit = inventoryPageSize, sortBy = inventorySort.field, sortDir = inventorySort.direction) {
+        console.log(`loadInventoryItems called with: page=${page}, limit=${limit}, sortBy=${sortBy}, sortDir=${sortDir}`);
+        inventoryCurrentPage = page;
+        inventoryPageSize = limit;
+        inventorySort.field = sortBy;
+        inventorySort.direction = sortDir;
+
+        const search = document.getElementById('inventorySearch').value.toLowerCase();
+        const type = document.getElementById('typeFilter').value.toLowerCase();
+        const fbaFilterElement = document.getElementById('fbaFilter');
+        const hasFba = fbaFilterElement ? fbaFilterElement.checked : false;
+
+        let url = `/api/inventory?page=${page}&limit=${limit}&sortBy=${sortBy}&sortDir=${sortDir}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        if (type) url += `&type=${encodeURIComponent(type)}`;
+        if (hasFba) url += `&hasAmazonFba=true`;
+
         try {
-            const response = await authenticatedFetch('/api/inventory');
+            // Use authenticatedFetch instead of makeAuthenticatedRequest
+            const response = await authenticatedFetch(url);
             if (!response.ok) {
-                throw new Error('Failed to fetch inventory items');
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-            let items = await response.json();
+            const data = await response.json();
+            console.log('Raw response data from /api/inventory:', data);
+
+            // Create pagination data if it doesn't exist in the response
+            let items = [];
+            let paginationData = {};
             
-            if (inventorySearchTerm) {
-                items = items.filter(item => 
-                    item.sku.toLowerCase().includes(inventorySearchTerm) ||
-                    item.name.toLowerCase().includes(inventorySearchTerm)
-                );
+            if (Array.isArray(data)) {
+                // Server returned items directly as array
+                items = data;
+                // Create pagination data manually
+                paginationData = {
+                    currentPage: page,
+                    totalPages: Math.ceil(items.length / limit),
+                    totalItems: items.length
+                };
+            } else if (data.items) {
+                // Server returned { items: [...], pagination: {...} } format
+                items = data.items;
+                paginationData = data.pagination || {};
+            } else {
+                // Fallback if data structure is unexpected
+                items = data;
+                paginationData = {
+                    currentPage: page,
+                    totalPages: 1,
+                    totalItems: items.length
+                };
+            }
+            
+            console.log('Extracted items:', items);
+            console.log('Pagination data:', paginationData);
+
+            const tableBody = document.getElementById('inventoryTableBody');
+            tableBody.innerHTML = ''; // Clear previous items
+
+            if (!items || items.length === 0) {
+                console.log('No items found or items array is empty.');
+                tableBody.innerHTML = '<tr><td colspan="12" class="text-center">No inventory items found.</td></tr>';
+                renderInventoryPagination({}); // Clear pagination if no items
+                return;
             }
 
-            if (inventoryTypeFilter) {
-                items = items.filter(item => item.type.toLowerCase() === inventoryTypeFilter);
-            }
-
-            items.sort((a, b) => {
-                let aVal = a[inventorySort.field];
-                let bVal = b[inventorySort.field];
-                if (inventorySort.field === 'total_stock') {
-                    aVal = parseFloat(aVal) || 0;
-                    bVal = parseFloat(bVal) || 0;
-                } else {
-                    aVal = (aVal || '').toString().toLowerCase();
-                    bVal = (bVal || '').toString().toLowerCase();
-                }
-                return inventorySort.direction === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
-            });
-            
-            const tbody = document.getElementById('inventoryTableBody');
-            tbody.innerHTML = '';
-            
             items.forEach(item => {
                 const tr = document.createElement('tr');
                 const isLowStock = item.minimum_quantity && item.total_stock < item.minimum_quantity;
@@ -562,6 +944,8 @@ let inventorySort = { field: 'sku', direction: 'asc' };
                     <td>${item.name}</td>
                     <td>${item.type}</td>
                     <td>${isLowStock ? `<span class="text-danger">${item.total_stock}</span>` : item.total_stock}</td>
+                    <td>${item.fba_inventory || '-'}</td>
+                    <td>${item.total_available || '-'}</td>
                     <td>${item.minimum_quantity || '-'}</td>
                     <td>${item.unit_type || '-'}</td>
                     <td>
@@ -573,13 +957,14 @@ let inventorySort = { field: 'sku', direction: 'asc' };
                         <button class="btn btn-sm btn-outline-primary" onclick="editItem('${item.sku}')">
                             <i class="bi bi-pencil"></i>
                         </button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${item.sku}')">
-                            <i class="bi bi-trash"></i>
+                        <button class="btn btn-sm btn-outline-warning" onclick="archiveItem('${item.sku}')">
+                            <i class="bi bi-archive"></i>
                         </button>
                     </td>
                 `;
-                tbody.appendChild(tr);
+                tableBody.appendChild(tr);
 
+                // Add batches row (unchanged, assuming backend still provides batches for current page items)
                 const batchesRow = document.createElement('tr');
                 batchesRow.className = 'batches-row d-none';
                 batchesRow.dataset.sku = item.sku;
@@ -618,32 +1003,124 @@ let inventorySort = { field: 'sku', direction: 'asc' };
                         </div>
                     </td>
                 `;
-                tbody.appendChild(batchesRow);
+                tableBody.appendChild(batchesRow);
             });
 
-            updateInventorySortIcons();
-
-            const productSkuSelect = document.getElementById('productSku');
-            productSkuSelect.innerHTML = '<option value="">Select a product</option>';
-            const finishedGoods = items.filter(item => item.type.toLowerCase() === 'finished good');
+            // Update and render pagination controls
+            const totalItems = items.length > limit ? items.length : (paginationData.totalItems || items.length);
+            const totalPages = paginationData.totalPages || Math.ceil(totalItems / limit);
             
-            finishedGoods.forEach(item => {
-                const option = document.createElement('option');
-                option.value = item.sku;
-                option.textContent = `${item.name} (${item.sku})`;
-                productSkuSelect.appendChild(option);
-            });
+            const pagination = {
+                currentPage: page,
+                totalPages: totalPages,
+                totalItems: totalItems,
+                limit: limit
+            };
+            
+            console.log('Using pagination:', pagination);
+            renderInventoryPagination(pagination);
 
-            if (finishedGoods.length === 0) {
-                const option = document.createElement('option');
-                option.disabled = true;
-                option.textContent = 'No finished goods available';
-                productSkuSelect.appendChild(option);
-            }
         } catch (error) {
             console.error('Error loading inventory items:', error);
-            alert('Failed to load inventory items');
+            const tableBody = document.getElementById('inventoryTableBody');
+            tableBody.innerHTML = '<tr><td colspan="12" class="text-center text-danger">Error loading inventory items.</td></tr>';
+            renderInventoryPagination({}); // Clear pagination on error
         }
+    }
+    
+    // New function to render inventory pagination controls
+    function renderInventoryPagination(pagination) {
+        // Render bottom pagination
+        renderPaginationControls('inventoryPaginationControls', pagination);
+        
+        // Render top pagination (smaller size)
+        renderPaginationControls('inventoryPaginationControlsTop', pagination, true);
+        
+        // Keep the page size selectors in sync
+        const bottomPageSize = document.getElementById('inventoryPageSize');
+        const topPageSize = document.getElementById('inventoryPageSizeTop');
+        if (bottomPageSize && topPageSize) {
+            bottomPageSize.value = inventoryPageSize.toString();
+            topPageSize.value = inventoryPageSize.toString();
+        }
+    }
+    
+    // Reusable function to render pagination controls
+    function renderPaginationControls(elementId, pagination, isCompact = false) {
+        const paginationControls = document.getElementById(elementId);
+        if (!paginationControls || !pagination || pagination.totalPages <= 1) {
+            if (paginationControls) paginationControls.innerHTML = ''; // Clear if exists but not needed
+            return;
+        }
+        paginationControls.innerHTML = ''; // Clear previous controls
+
+        const { currentPage, totalPages } = pagination;
+
+        // Previous button
+        const prevLi = document.createElement('li');
+        prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+        prevLi.innerHTML = `<a class="page-link" href="#" aria-label="Previous"><span aria-hidden="true">«</span></a>`;
+        if (currentPage > 1) {
+            prevLi.addEventListener('click', (e) => {
+                e.preventDefault();
+                loadInventoryItems(currentPage - 1);
+            });
+        }
+        paginationControls.appendChild(prevLi);
+
+        // Page numbers (simplified logic for brevity)
+        // Show current page, +/- 2 pages, first and last page
+        const pagesToShow = [];
+        
+        // For compact view (top pagination), show fewer page numbers
+        const pagesToDisplay = isCompact ? 3 : 5;
+        
+        if (totalPages <= pagesToDisplay) {
+            for (let i = 1; i <= totalPages; i++) pagesToShow.push(i);
+        } else {
+            pagesToShow.push(1);
+            if (currentPage > (isCompact ? 2 : 3)) pagesToShow.push('...');
+            
+            const start = Math.max(2, currentPage - (isCompact ? 0 : 1));
+            const end = Math.min(totalPages - 1, currentPage + (isCompact ? 0 : 1));
+            
+            for (let i = start; i <= end; i++) {
+                pagesToShow.push(i);
+            }
+            
+            if (currentPage < totalPages - (isCompact ? 1 : 2)) pagesToShow.push('...');
+            pagesToShow.push(totalPages);
+        }
+        
+        pagesToShow.forEach(pageNum => {
+             const pageLi = document.createElement('li');
+             if (pageNum === '...') {
+                 pageLi.className = 'page-item disabled';
+                 pageLi.innerHTML = `<span class="page-link">...</span>`;
+             } else {
+                 pageLi.className = `page-item ${pageNum === currentPage ? 'active' : ''}`;
+                 pageLi.innerHTML = `<a class="page-link" href="#">${pageNum}</a>`;
+                 if (pageNum !== currentPage) {
+                     pageLi.addEventListener('click', (e) => {
+                         e.preventDefault();
+                         loadInventoryItems(pageNum);
+                     });
+                 }
+             }
+             paginationControls.appendChild(pageLi);
+         });
+
+        // Next button
+        const nextLi = document.createElement('li');
+        nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+        nextLi.innerHTML = `<a class="page-link" href="#" aria-label="Next"><span aria-hidden="true">»</span></a>`;
+        if (currentPage < totalPages) {
+            nextLi.addEventListener('click', (e) => {
+                e.preventDefault();
+                loadInventoryItems(currentPage + 1);
+            });
+        }
+        paginationControls.appendChild(nextLi);
     }
 
     function updateInventorySortIcons() {
@@ -664,29 +1141,25 @@ let inventorySort = { field: 'sku', direction: 'asc' };
     async function loadProductionOrders(page) {
         try {
             console.log(`Fetching production orders from API for page ${page}...`);
-            const response = await authenticatedFetch(`/api/v1/production-orders?page=${page}&limit=${itemsPerPage}`);
+            const sortBy = currentSort.field;
+            const sortDir = currentSort.direction;
+            const response = await authenticatedFetch(`/api/v1/production-orders?page=${page}&limit=${itemsPerPage}&sort_by=${sortBy}&sort_dir=${sortDir}`);
+            
             if (!response.ok) {
                 throw new Error(`Failed to fetch production orders: ${response.status}`);
             }
+            
             const data = await response.json();
-            const orders = data.orders;
-            const pagination = data.pagination;
+            const orders = data.orders || [];
+            const pagination = data.pagination || {
+                currentPage: page,
+                totalPages: 1,
+                limit: itemsPerPage,
+                totalItems: orders.length
+            };
 
             console.log('Production orders received:', orders);
 
-            // Sort orders based on current sort settings
-            orders.sort((a, b) => {
-                let aVal = a[currentSort.field];
-                let bVal = b[currentSort.field];
-                
-                if (currentSort.field === 'due_date') {
-                    aVal = aVal ? new Date(aVal).getTime() : 0;
-                    bVal = bVal ? new Date(bVal).getTime() : 0;
-                }
-                
-                return currentSort.direction === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
-            });
-            
             const tbody = document.getElementById('productionTableBody');
             if (!tbody) {
                 console.error('Production table body element not found');
@@ -820,30 +1293,104 @@ let inventorySort = { field: 'sku', direction: 'asc' };
         // Initialize product SKU dropdown
         async function initializeProductSKUDropdown() {
             try {
-                const response = await authenticatedFetch('/api/inventory?type=finished_good');
-                if (!response) return;
+                console.log('Initializing product SKU dropdown...');
+                // Use the exact type name, case-insensitive match handled by backend
+                const response = await authenticatedFetch('/api/inventory?type=Finished Good&limit=500');
+                if (!response) {
+                    console.error('No response from inventory API');
+                    return;
+                }
                 
-                const products = await response.json();
+                const data = await response.json();
+                console.log('Received data from inventory API:', data);
+                
+                // Handle the new response format with items array
+                const products = data.items || [];
+                console.log(`Loaded ${products.length} finished goods:`, products);
+                
+                // Specifically log if Maitake product is found
+                const maitakeProducts = products.filter(p => 
+                    p.name.toLowerCase().includes('maitake') || 
+                    p.sku === 'FG-2001'
+                );
+                console.log(`Found ${maitakeProducts.length} Maitake products:`, maitakeProducts);
+                
                 const productSelect = document.getElementById('productSku');
                 
                 // Clear existing options
                 productSelect.innerHTML = '<option value="">Select a product</option>';
                 
-                // Add new options
-                products.forEach(product => {
+                // Add new options sorted by name for easier finding
+                products.sort((a, b) => a.name.localeCompare(b.name)).forEach(product => {
                     const option = document.createElement('option');
                     option.value = product.sku;
                     option.textContent = `${product.name} (${product.sku})`;
                     productSelect.appendChild(option);
+                    
+                    // Log if we're adding the Maitake product
+                    if (product.sku === 'FG-2001') {
+                        console.log('Added Maitake Mushroom Capsules to dropdown');
+                    }
                 });
 
-                // Initialize Select2
+                // Check the raw HTML of the dropdown to verify elements were added
+                console.log('Dropdown HTML after adding options:', productSelect.innerHTML);
+                
+                // Count options in dropdown
+                console.log(`Dropdown has ${productSelect.options.length} options (should be ${products.length + 1} with placeholder)`);
+                
+                // Check if the FG-2001 option actually exists in the DOM
+                const maitakeOption = Array.from(productSelect.options).find(option => option.value === 'FG-2001');
+                console.log('Maitake option in DOM:', maitakeOption ? 'Yes' : 'No');
+                
+                if (maitakeOption) {
+                    console.log('Maitake option text:', maitakeOption.textContent);
+                }
+
+                // Initialize Select2 with debugging
+                $(productSelect).on('select2:open', function(e) {
+                    console.log('Select2 dropdown opened');
+                    
+                    // Count visible options in Select2 dropdown
+                    setTimeout(() => {
+                        const visibleOptions = document.querySelectorAll('.select2-results__option');
+                        console.log(`Visible options in Select2 dropdown: ${visibleOptions.length}`);
+                        
+                        // Check if Maitake is in the visible options
+                        const hasMaitake = Array.from(visibleOptions).some(el => 
+                            el.textContent.toLowerCase().includes('maitake') || 
+                            el.textContent.includes('FG-2001')
+                        );
+                        console.log('Maitake visible in Select2 dropdown:', hasMaitake ? 'Yes' : 'No');
+                    }, 500); // Wait for Select2 to populate dropdown
+                });
+                
                 $(productSelect).select2({
                     theme: 'bootstrap-5',
                     width: '100%',
                     placeholder: 'Search for a product...',
-                    allowClear: true
+                    allowClear: true,
+                    dropdownParent: $('#addOrderModal')
                 });
+
+                // Add a dedicated search for maitake button for testing
+                const maitakeSearchBtn = document.createElement('button');
+                maitakeSearchBtn.textContent = 'Test Search for Maitake';
+                maitakeSearchBtn.className = 'btn btn-sm btn-outline-info mt-2';
+                maitakeSearchBtn.style.float = 'right';
+                maitakeSearchBtn.onclick = function(e) {
+                    e.preventDefault();
+                    // Try to find maitake in the select2 dropdown
+                    $('#productSku').select2('open');
+                    $('.select2-search__field').val('maitake');
+                    $('.select2-search__field').trigger('input');
+                    
+                    setTimeout(() => {
+                        const visibleResults = document.querySelectorAll('.select2-results__option');
+                        console.log('Search results for "maitake":', Array.from(visibleResults).map(el => el.textContent));
+                    }, 500);
+                };
+                document.querySelector('#addOrderForm .mb-3:first-child').appendChild(maitakeSearchBtn);
 
                 // Add change event listener to Select2
                 $(productSelect).on('select2:select', async function(e) {
@@ -954,70 +1501,181 @@ let inventorySort = { field: 'sku', direction: 'asc' };
             }
         }
 
-        async function createProductionOrder() {
-    if (!checkAuthForAction('create_production_order')) {
-        return;
-    }
-    
-    const productSku = document.getElementById('productSku').value;
-    const quantity = document.getElementById('quantity').value;
-    const dueDate = document.getElementById('dueDate').value;
-    const mmrVersion = document.getElementById('mmrVersion').value;
-    
-    if (!productSku || !quantity || !mmrVersion) {
-        alert('Please fill in all required fields');
-        return;
-    }
-    
-    const formData = {
-        product_sku: productSku,
-        quantity: Number(quantity),
-        due_date: dueDate || null,
-        status: 'Pending',
-        mmr_product_sku: productSku,
-        mmr_version: Number(mmrVersion)
-    };
-    
-    try {
-        console.log('Creating production order with data:', formData);
-        document.getElementById('createOrderBtn').disabled = true;
-        document.getElementById('createOrderSpinner').classList.remove('d-none');
-        
-        const response = await authenticatedFetch('/api/v1/production-orders/simple', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(formData)
-        });
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Server responded with status: ${response.status}`);
+        async function createProductionOrder(mmr_product_sku, mmr_version, quantity, force = false) {
+            try {
+                const response = await authenticatedFetch('/api/production-orders', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        mmr_product_sku,
+                        mmr_version,
+                        quantity,
+                        force
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    if (response.status === 409 && data.code === 'INSUFFICIENT_INVENTORY') {
+                        // Show warning dialog with option to force create
+                        const warnings = data.details.warnings.map(w => 
+                            `${w.name} (${w.sku}): need ${w.required} ${w.unit}, have ${w.available} ${w.unit}`
+                        ).join('\n');
+                        
+                        const proceed = await showConfirmDialog(
+                            'Insufficient Inventory',
+                            `The following items have insufficient inventory:\n\n${warnings}\n\nDo you want to proceed anyway?`,
+                            'Proceed',
+                            'Cancel'
+                        );
+
+                        if (proceed) {
+                            // Retry with force=true
+                            return createProductionOrder(mmr_product_sku, mmr_version, quantity, true);
+                        } else {
+                            throw new Error('Production order cancelled due to insufficient inventory');
+                        }
+                    } else {
+                        // Show error dialog for other errors
+                        let errorMessage = data.message;
+                        if (data.details) {
+                            if (Array.isArray(data.details)) {
+                                errorMessage += '\n\nDetails:\n' + data.details.map(d => d.message || JSON.stringify(d)).join('\n');
+                            } else if (typeof data.details === 'object') {
+                                errorMessage += '\n\nDetails:\n' + Object.entries(data.details)
+                                    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+                                    .join('\n');
+                            }
+                        }
+                        await showErrorDialog('Error Creating Production Order', errorMessage);
+                        throw new Error(data.message);
+                    }
+                }
+
+                // Success case
+                showSuccessMessage('Production order created successfully!');
+                return data;
+            } catch (error) {
+                console.error('Error creating production order:', error);
+                throw error;
+            }
         }
-        
-        const result = await response.json();
-        console.log('Production order created:', result);
-        
-        document.getElementById('productSku').value = '';
-        document.getElementById('quantity').value = '';
-        document.getElementById('dueDate').value = '';
-        
-        const modal = bootstrap.Modal.getInstance(document.getElementById('addOrderModal'));
-        modal.hide();
-        
-        showAlert('Production order created successfully', 'success');
-        
-        // Reload the current page
-        loadProductionOrders(currentPage);
-    } catch (error) {
-        console.error('Error creating production order:', error);
-        showAlert('Failed to create production order: ' + error.message, 'danger');
-    } finally {
-        document.getElementById('createOrderBtn').disabled = false;
-        document.getElementById('createOrderSpinner').classList.add('d-none');
-    }
-}
+
+        // Success message function
+        function showSuccessMessage(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast success';
+            toast.innerHTML = `
+                <div class="toast-header">
+                    <strong class="me-auto">Success</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                </div>
+                <div class="toast-body">
+                    ${message}
+                </div>
+            `;
+            document.body.appendChild(toast);
+            
+            // Initialize Bootstrap toast
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 3000
+            });
+            bsToast.show();
+            
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        // Error dialog function
+        async function showErrorDialog(title, message) {
+            return new Promise((resolve) => {
+                const modalId = 'errorModal' + Date.now();
+                const modal = document.createElement('div');
+                modal.className = 'modal fade';
+                modal.id = modalId;
+                modal.setAttribute('tabindex', '-1');
+                modal.innerHTML = `
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header bg-danger text-white">
+                                <h5 class="modal-title">${title}</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <pre class="error-message">${message}</pre>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                const bsModal = new bootstrap.Modal(modal);
+                bsModal.show();
+                
+                // Resolve when modal is hidden
+                modal.addEventListener('hidden.bs.modal', () => {
+                    modal.remove();
+                    resolve();
+                });
+            });
+        }
+
+        // Confirmation dialog function
+        async function showConfirmDialog(title, message, confirmText = 'OK', cancelText = 'Cancel') {
+            return new Promise((resolve) => {
+                const modalId = 'confirmModal' + Date.now();
+                const modal = document.createElement('div');
+                modal.className = 'modal fade';
+                modal.id = modalId;
+                modal.setAttribute('tabindex', '-1');
+                modal.innerHTML = `
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header bg-warning">
+                                <h5 class="modal-title">${title}</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <pre class="confirm-message">${message}</pre>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">${cancelText}</button>
+                                <button type="button" class="btn btn-primary confirm-btn">${confirmText}</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                const bsModal = new bootstrap.Modal(modal);
+                
+                // Set up confirm button
+                const confirmBtn = modal.querySelector('.confirm-btn');
+                confirmBtn.addEventListener('click', () => {
+                    bsModal.hide();
+                    resolve(true);
+                });
+                
+                // Handle dismiss/cancel
+                modal.addEventListener('hidden.bs.modal', () => {
+                    if (!modal.resolved) {
+                        resolve(false);
+                    }
+                    modal.remove();
+                });
+                
+                bsModal.show();
+            });
+        }
 
         // Helper function to get status color
         function getStatusColor(status) {
@@ -1149,25 +1807,34 @@ let inventorySort = { field: 'sku', direction: 'asc' };
             }
         }
 
-        // Delete inventory item
-        async function deleteItem(sku) {
-            if (!confirm('Are you sure you want to delete this item?')) {
+        // Archive inventory item (previously deleteItem)
+        async function archiveItem(sku) {
+            if (!checkAuthForAction('delete_inventory')) { // Still uses delete_inventory permission
+                return;
+            }
+            if (!confirm('Are you sure you want to archive this item? It will be hidden from most views but can be reactivated later.')) {
                 return;
             }
 
             try {
-                const response = await authenticatedFetch(`/api/inventory/${sku}`, {
-                    method: 'DELETE'
+                const response = await authenticatedFetch(`/api/inventory/${sku}/status`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ is_active: false }) // Set is_active to false
                 });
 
-                if (!response) {
-                    throw new Error('Failed to delete inventory item');
+                if (!response || !response.ok) {
+                    const errorData = await response?.json().catch(() => ({}));
+                    throw new Error(errorData.error || 'Failed to archive inventory item');
                 }
 
-                loadInventoryItems();
+                showAlert('Item archived successfully', 'success');
+                loadInventoryItems(); // Refresh the list to hide the item
             } catch (error) {
-                console.error('Error deleting inventory item:', error);
-                alert('Failed to delete inventory item');
+                console.error('Error archiving inventory item:', error);
+                showAlert('Failed to archive inventory item: ' + error.message, 'danger');
             }
         }
 
@@ -1286,7 +1953,8 @@ let inventorySort = { field: 'sku', direction: 'asc' };
             try {
                 // Get all inventory items first
                 const response = await authenticatedFetch('/api/inventory');
-                const items = await response.json();
+                const data = await response.json();
+                const items = data || [];
                 
                 // Initialize Select2 for all SKU dropdowns
                 $('.item-sku').each(function() {
@@ -1504,6 +2172,291 @@ let inventorySort = { field: 'sku', direction: 'asc' };
             localStorage.clear();
             window.location.href = '/login.html';
         }
+
+        // FBA Dashboard functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize FBA dashboard
+            loadFbaDashboard();
+            
+            // Refresh button
+            const refreshButton = document.getElementById('refresh-fba');
+            if (refreshButton) {
+                refreshButton.addEventListener('click', function() {
+                    this.disabled = true;
+                    this.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Refreshing...';
+                    
+                    // Trigger FBA sync with authenticatedFetch
+                    authenticatedFetch('/api/v1/sync/fba-inventory')
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            loadFbaDashboard();
+                            this.disabled = false;
+                            this.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh';
+                        })
+                        .catch(error => {
+                            console.error('Error syncing FBA inventory:', error);
+                            this.disabled = false;
+                            this.innerHTML = '<i class="bi bi-arrow-repeat"></i> Refresh';
+                        });
+                });
+            }
+            
+            // Add event listener for FBA sync button in main inventory view
+            const syncFbaButton = document.getElementById('sync-fba-button');
+            if (syncFbaButton) {
+                syncFbaButton.addEventListener('click', function() {
+                    this.disabled = true;
+                    this.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing FBA...';
+                    
+                    // Trigger FBA sync with authenticatedFetch
+                    authenticatedFetch('/api/v1/sync/fba-inventory')
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            loadInventoryItems(); // Reload inventory to show updated FBA data
+                            this.disabled = false;
+                            this.innerHTML = '<i class="bi bi-sync"></i> Sync FBA Inventory';
+                            showAlert('success', 'FBA inventory synced successfully');
+                        })
+                        .catch(error => {
+                            console.error('Error syncing FBA inventory:', error);
+                            this.disabled = false;
+                            this.innerHTML = '<i class="bi bi-sync"></i> Sync FBA Inventory';
+                            showAlert('danger', 'Failed to sync FBA inventory: ' + error.message);
+                        });
+                });
+            }
+        });
+        
+        async function loadFbaDashboard() {
+            try {
+                // Fetch all inventory with FBA inventory - use authenticated fetch
+                const response = await authenticatedFetch('/api/inventory?hasAmazonFba=true');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                const items = data.items || [];
+                
+                if (Array.isArray(items)) {
+                    // Calculate totals
+                    let totalProducts = 0;
+                    let totalInventory = 0;
+                    let totalUnfulfillable = 0;
+                    const lowStockItems = [];
+                    
+                    items.forEach(item => {
+                        if (item.fba_inventory > 0) {
+                            totalProducts++;
+                            totalInventory += item.fba_inventory;
+                            
+                            if (item.fba_unfulfillable) {
+                                totalUnfulfillable += item.fba_unfulfillable;
+                            }
+                            
+                            // Check if low stock
+                            if (item.fba_available <= 20) {
+                                lowStockItems.push(item);
+                            }
+                        }
+                    });
+                    
+                    // Update summary cards
+                    document.getElementById('fba-total-products').textContent = totalProducts;
+                    document.getElementById('fba-total-inventory').textContent = totalInventory;
+                    document.getElementById('fba-unfulfillable').textContent = totalUnfulfillable;
+                    
+                    // Update low stock table
+                    const lowStockTable = document.getElementById('fba-low-stock');
+                    if (lowStockItems.length > 0) {
+                        // Sort by available inventory (ascending)
+                        lowStockItems.sort((a, b) => (a.fba_available || 0) - (b.fba_available || 0));
+                        
+                        let html = '';
+                        lowStockItems.forEach(item => {
+                            // Determine status indicator
+                            let statusClass = 'bg-warning';
+                            let statusText = 'Low';
+                            if (item.fba_available <= 5) {
+                                statusClass = 'bg-danger';
+                                statusText = 'Critical';
+                            }
+                            
+                            html += `
+                                 <tr>
+                                     <td>${item.sku}</td>
+                                     <td>${item.name}</td>
+                                     <td>${item.fba_available || 0}</td>
+                                     <td>${item.fba_inventory || 0}</td>
+                                     <td><span class="badge ${statusClass}">${statusText}</span></td>
+                                 </tr>
+                             `;
+                         });
+                         lowStockTable.innerHTML = html;
+                     } else {
+                         lowStockTable.innerHTML = '<tr><td colspan="5" class="text-center">No low stock items found</td></tr>';
+                     }
+                 } else {
+                     console.error('Error loading FBA inventory data');
+                 }
+             } catch (error) {
+                 console.error('Error loading FBA dashboard:', error);
+             }
+         }
+     </script>
+
+    <!-- Function to handle the form submission for creating a production order -->
+    <script>
+    async function handleCreateProductionOrder() {
+        try {
+            // Get form values
+            const mmr_product_sku = document.getElementById('productSku').value;
+            const mmr_version = parseInt(document.getElementById('mmrVersion').value);
+            const quantity = parseInt(document.getElementById('quantity').value);
+
+            if (!mmr_product_sku || isNaN(mmr_version) || isNaN(quantity)) {
+                await showErrorDialog('Missing Fields', 'Please fill in all required fields: Product SKU, MMR Version, and Quantity.');
+                return;
+            }
+
+            console.log('Creating production order with:', { mmr_product_sku, mmr_version, quantity });
+
+            // Show spinner
+            document.getElementById('createOrderBtn').disabled = true;
+            document.getElementById('createOrderSpinner').classList.remove('d-none');
+
+            try {
+                const response = await authenticatedFetch('/api/production-orders', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        mmr_product_sku,
+                        mmr_version,
+                        quantity,
+                        force: false // Start without forcing
+                    })
+                });
+
+                // Log the response status and headers for debugging
+                console.log('Response status:', response.status);
+                console.log('Response headers:', [...response.headers.entries()]);
+                
+                // Get response data
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (!response.ok) {
+                    // Handle 409 Conflict specifically for insufficient inventory
+                    if (response.status === 409) {
+                        console.log('Received 409 Conflict response:', data);
+                        
+                        // Check if this is an inventory warning
+                        if (data.code === 'INSUFFICIENT_INVENTORY' && data.details && data.details.warnings) {
+                            // Format warnings for display
+                            const warnings = data.details.warnings.map(w => 
+                                `${w.name} (${w.sku || 'unknown'}): need ${w.required} ${w.unit}, have ${w.available} ${w.unit}`
+                            ).join('\n');
+                            
+                            // Show confirmation dialog for inventory warnings
+                            const proceed = await showConfirmDialog(
+                                'Insufficient Inventory',
+                                `The following items have insufficient inventory:\n\n${warnings}\n\nDo you want to proceed anyway?`,
+                                'Proceed',
+                                'Cancel'
+                            );
+
+                            if (proceed) {
+                                // Try again with force=true
+                                console.log('User chose to proceed despite inventory warnings');
+                                const forceResponse = await authenticatedFetch('/api/production-orders', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        mmr_product_sku,
+                                        mmr_version,
+                                        quantity,
+                                        force: true
+                                    })
+                                });
+
+                                const forceData = await forceResponse.json();
+                                console.log('Force create response:', forceData);
+                                
+                                if (!forceResponse.ok) {
+                                    throw new Error(forceData.message || 'Failed to create production order');
+                                }
+                                
+                                // Show success message
+                                showSuccessMessage('Production order created successfully!');
+                                
+                                // Close modal
+                                const modal = bootstrap.Modal.getInstance(document.getElementById('addOrderModal'));
+                                modal.hide();
+                                
+                                // Refresh production orders list
+                                await loadProductionOrders(currentPage);
+                                return;
+                            } else {
+                                console.log('User cancelled production order due to inventory warnings');
+                                throw new Error('Production order cancelled due to insufficient inventory');
+                            }
+                        } else {
+                            // Generic 409 error (might be a different conflict)
+                            const errorMessage = data.message || 'Conflict error occurred';
+                            await showErrorDialog('Conflict Error', errorMessage);
+                            throw new Error(errorMessage);
+                        }
+                    } else {
+                        // Handle other error types
+                        let errorMessage = data.message || 'An error occurred';
+                        if (data.details) {
+                            if (Array.isArray(data.details)) {
+                                errorMessage += '\n\nDetails:\n' + data.details.map(d => d.message || JSON.stringify(d)).join('\n');
+                            } else if (typeof data.details === 'object') {
+                                errorMessage += '\n\nDetails:\n' + Object.entries(data.details)
+                                    .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+                                    .join('\n');
+                            }
+                        }
+                        await showErrorDialog('Error Creating Production Order', errorMessage);
+                        throw new Error(data.message || 'Failed to create production order');
+                    }
+                }
+
+                // Show success message
+                showSuccessMessage('Production order created successfully!');
+                
+                // Close modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('addOrderModal'));
+                modal.hide();
+                
+                // Refresh production orders list
+                await loadProductionOrders(currentPage);
+            } catch (error) {
+                console.error('Error in API call:', error);
+                throw error;
+            }
+        } catch (error) {
+            console.error('Error in handleCreateProductionOrder:', error);
+        } finally {
+            // Hide spinner
+            document.getElementById('createOrderBtn').disabled = false;
+            document.getElementById('createOrderSpinner').classList.add('d-none');
+        }
+    }
     </script>
-</body>
-</html>
+ </body>
+ </html>
