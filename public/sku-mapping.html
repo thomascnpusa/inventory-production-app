@@ -48,13 +48,28 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link active" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <!-- Production Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="/admin.html">Admin</a>
+                    <!-- Admin Dropdown -->
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item active" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">
@@ -86,6 +101,9 @@
                 </button>
                 <button type="button" class="btn btn-warning me-2" id="mergeInventoryBtn">
                     <i class="bi bi-boxes"></i> Merge Inventory
+                </button>
+                <button type="button" class="btn btn-info me-2" id="suggestMergesBtn">
+                    <i class="bi bi-magic"></i> Suggest Merges
                 </button>
                 <div class="dropdown d-inline">
                     <button class="btn btn-info dropdown-toggle" type="button" id="suggestionDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -353,6 +371,37 @@
         </div>
     </div>
 
+    <!-- Merge Suggestions Modal -->
+    <div class="modal fade" id="mergeSuggestionsModal" tabindex="-1" aria-labelledby="mergeSuggestionsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="mergeSuggestionsModalLabel">Suggested Inventory Merges</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="mergeSuggestionsLoading" class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p>Finding potential inventory items to merge...</p>
+                    </div>
+                    <div id="mergeSuggestionsContent" style="display: none;">
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> These suggestions are based on similar SKU names. Review each group carefully before merging.
+                        </div>
+                        <p><span id="mergeGroupCount">0</span> potential merge groups found.</p>
+                        <div id="mergeGroupsContainer"></div>
+                    </div>
+                    <div id="noMergeSuggestionsMessage" class="text-center" style="display: none;">
+                        <i class="bi bi-exclamation-circle fs-1 text-warning"></i>
+                        <p class="mt-2">No potential merge groups were found. Try manually searching for items to merge.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast for notifications -->
     <div class="toast-container position-fixed bottom-0 end-0 p-3">
         <div id="notificationToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="5000">
@@ -377,6 +426,8 @@
         let mappingsData = [];
         let csvData = [];
         let selectedSuggestions = new Set();
+        let inventoryItems = [];
+        let mergeGroups = [];
     
         // Elements
         const mappingsTableBody = document.getElementById('mappingsTableBody');
@@ -411,12 +462,14 @@
         const importShopifySkusBtn = document.getElementById('importShopifySkusBtn');
         const importAllSkusBtn = document.getElementById('importAllSkusBtn');
         const mergeInventoryBtn = document.getElementById('mergeInventoryBtn');
+        const suggestMergesBtn = document.getElementById('suggestMergesBtn');
     
         // Bootstrap components
         const addMappingModal = new bootstrap.Modal(document.getElementById('addMappingModal'));
         const bulkUploadModal = new bootstrap.Modal(document.getElementById('bulkUploadModal'));
         const suggestionsModal = new bootstrap.Modal(document.getElementById('suggestionsModal'));
         const mergeInventoryModal = new bootstrap.Modal(document.getElementById('mergeInventoryModal'));
+        const mergeSuggestionsModal = new bootstrap.Modal(document.getElementById('mergeSuggestionsModal'));
         const notificationToast = new bootstrap.Toast(document.getElementById('notificationToast'));
     
         // Initialize
@@ -490,6 +543,7 @@
             importShopifySkusBtn.addEventListener('click', () => openImportModal('shopify'));
             importAllSkusBtn.addEventListener('click', () => openImportModal('all'));
             mergeInventoryBtn.addEventListener('click', () => openMergeInventoryModal());
+            suggestMergesBtn.addEventListener('click', () => openMergeSuggestionsModal());
     
             logoutBtn.addEventListener('click', logout);
         }
@@ -1015,7 +1069,7 @@
                     return;
                 }
                 
-                if (!confirm(`Merge ${skusToMerge.length} items into ${primarySku}? This cannot be undone.`)) {
+                if (!confirm(`Merge ${skusToMerge.length} items into ${primarySku}? This cannot be undone.\n\nAll SKU mappings will be preserved and updated to point to ${primarySku}.`)) {
                     return;
                 }
                 
@@ -1031,7 +1085,11 @@
                 }
                 
                 const result = await response.json();
-                showNotification('Success', `Merged ${skusToMerge.length} items into ${primarySku}`, 'success');
+                
+                // Also refresh the SKU mappings to reflect the changes
+                loadMappings();
+                
+                showNotification('Success', `Merged ${skusToMerge.length} items into ${primarySku} and updated all SKU mappings`, 'success');
                 mergeInventoryModal.hide();
                 
                 // Refresh the search
@@ -1040,6 +1098,221 @@
                 console.error('Merge error:', error);
                 showNotification('Error', `Merge failed: ${error.message}`, 'danger');
             }
+        }
+
+        // Merge Suggestions Modal
+        async function openMergeSuggestionsModal() {
+            const mergeSuggestionsLoading = document.getElementById('mergeSuggestionsLoading');
+            const mergeSuggestionsContent = document.getElementById('mergeSuggestionsContent');
+            const noMergeSuggestionsMessage = document.getElementById('noMergeSuggestionsMessage');
+            const mergeGroupCount = document.getElementById('mergeGroupCount');
+            const mergeGroupsContainer = document.getElementById('mergeGroupsContainer');
+            
+            // Reset modal content
+            mergeSuggestionsLoading.style.display = 'block';
+            mergeSuggestionsContent.style.display = 'none';
+            noMergeSuggestionsMessage.style.display = 'none';
+            mergeGroupsContainer.innerHTML = '';
+            
+            // Show the modal
+            mergeSuggestionsModal.show();
+            
+            try {
+                // Fetch all inventory items
+                const response = await authenticatedFetch('/api/inventory?limit=1000');
+                if (!response.ok) throw new Error('Failed to fetch inventory items');
+                
+                const data = await response.json();
+                inventoryItems = data.items || [];
+                
+                if (inventoryItems.length === 0) {
+                    throw new Error('No inventory items found');
+                }
+                
+                // Find potential merge groups
+                mergeGroups = findPotentialMergeGroups(inventoryItems);
+                
+                // Update the modal content
+                mergeSuggestionsLoading.style.display = 'none';
+                
+                if (mergeGroups.length === 0) {
+                    noMergeSuggestionsMessage.style.display = 'block';
+                } else {
+                    mergeSuggestionsContent.style.display = 'block';
+                    mergeGroupCount.textContent = mergeGroups.length;
+                    renderMergeGroups(mergeGroupsContainer, mergeGroups);
+                }
+            } catch (error) {
+                console.error('Error suggesting merges:', error);
+                mergeSuggestionsLoading.style.display = 'none';
+                noMergeSuggestionsMessage.style.display = 'block';
+                showNotification('Error', `Failed to suggest merges: ${error.message}`, 'danger');
+            }
+        }
+        
+        // Find potential merge groups based on similar SKUs
+        function findPotentialMergeGroups(items) {
+            const groups = {};
+            const prefixPattern = /^([pP]-|[a-zA-Z]+-)?(.+)$/;
+            
+            // Group items by their normalized SKU
+            items.forEach(item => {
+                if (!item.sku) return;
+                
+                // Normalize the SKU: remove prefixes like p-, P-, etc.
+                const matches = item.sku.match(prefixPattern);
+                if (!matches) return;
+                
+                const normalizedSku = matches[2].toLowerCase();
+                
+                // Skip if normalized SKU is empty
+                if (!normalizedSku) return;
+                
+                if (!groups[normalizedSku]) {
+                    groups[normalizedSku] = [];
+                }
+                
+                groups[normalizedSku].push(item);
+            });
+            
+            // Only keep groups with multiple items
+            return Object.values(groups)
+                .filter(group => group.length > 1)
+                .sort((a, b) => {
+                    // Sort by normalized SKU (numerical if possible)
+                    const numA = parseInt(a[0].sku.replace(/\D/g, ''));
+                    const numB = parseInt(b[0].sku.replace(/\D/g, ''));
+                    if (!isNaN(numA) && !isNaN(numB)) {
+                        return numA - numB;
+                    }
+                    return a[0].sku.localeCompare(b[0].sku);
+                });
+        }
+        
+        // Render merge groups in the UI
+        function renderMergeGroups(container, groups) {
+            container.innerHTML = '';
+            
+            groups.forEach((group, index) => {
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'card mb-3';
+                
+                // Calculate total stock across all items in the group
+                const totalStock = group.reduce((sum, item) => sum + (Number(item.stock_level) || 0), 0);
+                
+                let tableRows = '';
+                group.forEach(item => {
+                    const stockLevel = Number(item.stock_level) || 0;
+                    tableRows += `
+                        <tr>
+                            <td><input type="radio" name="primarySku${index}" value="${item.sku}" class="primary-sku-radio"></td>
+                            <td>${item.sku}</td>
+                            <td>${item.name || 'Unnamed'}</td>
+                            <td>${stockLevel}</td>
+                            <td>${item.type || 'Unknown'}</td>
+                        </tr>
+                    `;
+                });
+                
+                groupDiv.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">Group ${index + 1}: ${group.length} similar items (Total stock: ${totalStock})</h6>
+                        <button type="button" class="btn btn-sm btn-primary merge-group-btn" disabled data-group-index="${index}">
+                            Merge Group
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted small">Select a primary SKU to keep, then click "Merge Group"</p>
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> <strong>Note:</strong> SKU mappings from all merged items will be preserved and updated to point to the primary SKU.
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Primary</th>
+                                        <th>SKU</th>
+                                        <th>Name</th>
+                                        <th>Stock</th>
+                                        <th>Type</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                
+                container.appendChild(groupDiv);
+                
+                // Set up event listeners for the primary radio buttons
+                const radioButtons = groupDiv.querySelectorAll('.primary-sku-radio');
+                const mergeButton = groupDiv.querySelector('.merge-group-btn');
+                
+                radioButtons.forEach(radio => {
+                    radio.addEventListener('change', () => {
+                        mergeButton.disabled = false;
+                    });
+                });
+                
+                // Set up merge button event listener
+                mergeButton.addEventListener('click', async () => {
+                    const selectedRadio = groupDiv.querySelector(`.primary-sku-radio:checked`);
+                    if (!selectedRadio) {
+                        showNotification('Error', 'Please select a primary SKU', 'danger');
+                        return;
+                    }
+                    
+                    const primarySku = selectedRadio.value;
+                    const skusToMerge = group.map(item => item.sku);
+                    
+                    if (!confirm(`Merge ${skusToMerge.length} items into ${primarySku}? This cannot be undone.\n\nAll SKU mappings will be preserved and updated to point to ${primarySku}.`)) {
+                        return;
+                    }
+                    
+                    try {
+                        // Disable the merge button during the operation
+                        mergeButton.disabled = true;
+                        mergeButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Merging...';
+                        
+                        const response = await authenticatedFetch('/api/inventory/merge', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ primarySku, skusToMerge })
+                        });
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.error || 'Merge failed');
+                        }
+                        
+                        // Remove the merged group from the UI
+                        groupDiv.remove();
+                        
+                        // Update the group count
+                        const remainingGroups = document.querySelectorAll('#mergeGroupsContainer .card').length;
+                        document.getElementById('mergeGroupCount').textContent = remainingGroups;
+                        
+                        if (remainingGroups === 0) {
+                            document.getElementById('mergeSuggestionsContent').style.display = 'none';
+                            document.getElementById('noMergeSuggestionsMessage').style.display = 'block';
+                        }
+                        
+                        // Also refresh the SKU mappings to reflect the changes
+                        loadMappings();
+                        
+                        showNotification('Success', `Merged ${skusToMerge.length} items into ${primarySku} and updated all SKU mappings`, 'success');
+                    } catch (error) {
+                        console.error('Merge error:', error);
+                        // Reset the merge button
+                        mergeButton.disabled = false;
+                        mergeButton.innerHTML = 'Merge Group';
+                        showNotification('Error', `Merge failed: ${error.message}`, 'danger');
+                    }
+                });
+            });
         }
     </script>
 </body>

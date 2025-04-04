@@ -563,3 +563,12 @@ label {
 }
 
 .pagination { margin-top: 20px; justify-content: center; }
+
+/* Spinner animation for loading indicators */
+.spin {
+    animation: spinner-border 0.75s linear infinite;
+}
+
+@keyframes spinner-border {
+    to { transform: rotate(360deg); }
+}

@@ -76,9 +76,14 @@
             margin-bottom: 15px;
         }
         .stat-value {
-            font-size: 24px;
-            font-weight: 600;
+            font-size: 1.8em;
+            font-weight: bold;
         }
+        .bg-stock-low { background-color: #f8d7da !important; } /* Light Red */
+        .bg-stock-medium { background-color: #fff3cd !important; } /* Light Yellow */
+        .bg-stock-high { background-color: #d1e7dd !important; } /* Light Green */
+        .bg-days-critical { background-color: #f8d7da !important; } /* Light Red (< min days) */
+        .bg-days-warning { background-color: #fff3cd !important; } /* Light Yellow (< min days + buffer) */
         .stat-label {
             font-size: 14px;
             color: #6c757d;
@@ -90,6 +95,23 @@
         /* Making the table more compact */
         .table td, .table th {
             padding: 0.5rem;
+        }
+        /* Fixed table layout */
+        .table-fixed-layout {
+            table-layout: fixed;
+            width: 100%;
+        }
+        /* Handle text overflow in specific columns */
+        .table-fixed-layout tbody td:nth-child(1), /* SKU */
+        .table-fixed-layout tbody td:nth-child(2) { /* Name */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            /* max-width: 0; /* Helper for ellipsis in some cases, might not be needed */
+        }
+        /* Ensure vertical alignment in table headers */
+        .table-fixed-layout thead th {
+            vertical-align: top; /* Align to top */
         }
     </style>
 </head>
@@ -103,13 +125,26 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link active" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="/admin.html">Admin</a>
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">
@@ -123,11 +158,13 @@
     <div class="container-fluid mt-4">
         <div class="row mb-4">
             <div class="col-12">
-                <h1 class="mb-3">Sales & Production Forecast</h1>
-                <p class="text-muted">This page shows 30-day forecasts based on historical sales data.</p>
-                
-                <div class="d-flex justify-content-end mb-3">
-                    <button id="refreshBtn" class="btn btn-primary">
+                <!-- Flex container for Title, Description, and Button -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h1 class="mb-1 d-inline-block me-3">Sales & Production Forecast</h1>
+                        <p class="text-muted d-inline-block mb-0">This page shows 30-day forecasts based on historical sales data.</p>
+                    </div>
+                    <button id="refreshBtn" class="btn btn-primary flex-shrink-0">
                         <i class="bi bi-arrow-clockwise"></i> Refresh Forecast
                     </button>
                 </div>
@@ -153,16 +190,30 @@
                             </div>
                             <div class="col-md-3">
                                 <select id="sortSelect" class="form-select">
-                                    <option value="forecast-desc">30-Day Forecast (High to Low)</option>
-                                    <option value="forecast-asc">30-Day Forecast (Low to High)</option>
-                                    <option value="sku-asc">SKU (A to Z)</option>
-                                    <option value="sku-desc">SKU (Z to A)</option>
-                                    <option value="name-asc">Name (A to Z)</option>
-                                    <option value="name-desc">Name (Z to A)</option>
-                                    <option value="stock-desc">Current Stock (High to Low)</option>
-                                    <option value="stock-asc">Current Stock (Low to High)</option>
-                                    <option value="duedate-asc">Due Date (Earliest First)</option>
-                                    <option value="duedate-desc">Due Date (Latest First)</option>
+                                    <option value="forecast_30d-desc" selected>Fcst (30d) (High to Low)</option>
+                                    <option value="forecast_30d-asc">Fcst (30d) (Low to High)</option>
+                                    <option value="forecast_60d-desc">Fcst (60d) (High to Low)</option>
+                                    <option value="forecast_60d-asc">Fcst (60d) (Low to High)</option>
+                                    <option value="forecast_90d-desc">Fcst (90d) (High to Low)</option>
+                                    <option value="forecast_90d-asc">Fcst (90d) (Low to High)</option>
+                                    <option value="sku-asc">SKU (A-Z)</option>
+                                    <option value="sku-desc">SKU (Z-A)</option>
+                                    <option value="name-asc">Product Name (A-Z)</option>
+                                    <option value="name-desc">Product Name (Z-A)</option>
+                                    <option value="warehouse-desc">WH Stock (High to Low)</option>
+                                    <option value="warehouse-asc">WH Stock (Low to High)</option>
+                                    <option value="fba-desc">FBA Stock (High to Low)</option>
+                                    <option value="fba-asc">FBA Stock (Low to High)</option>
+                                    <option value="wh_days-asc">WH Days Left (Low to High)</option>
+                                    <option value="wh_days-desc">WH Days Left (High to Low)</option>
+                                    <option value="fba_days-asc">FBA Days Left (Low to High)</option>
+                                    <option value="fba_days-desc">FBA Days Left (High to Low)</option>
+                                    <option value="wh_run_out_date-asc">WH Run Out Date (Asc)</option>
+                                    <option value="wh_run_out_date-desc">WH Run Out Date (Desc)</option>
+                                    <option value="fba_run_out_date-asc">FBA Run Out Date (Asc)</option>
+                                    <option value="fba_run_out_date-desc">FBA Run Out Date (Desc)</option>
+                                    <option value="production_needed-asc">Production Needed (Low to High)</option>
+                                    <option value="production_needed-desc">Production Needed (High to Low)</option>
                                 </select>
                             </div>
                             <div class="col-md-3">
@@ -183,18 +234,22 @@
                         </div>
                         <div id="forecastContent" style="display: none;">
                             <div class="table-responsive">
-                                <table class="table table-striped table-hover">
+                                <table class="table table-striped table-hover table-fixed-layout">
                                     <thead>
                                         <tr>
-                                            <th class="sortable" data-sort="sku">Product SKU <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="name">Product Name <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="stock">Current Stock <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="forecast30">30-Day Forecast <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="forecast60">60-Day Forecast <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="forecast90">90-Day Forecast <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="production">Production Units <span class="sort-icon"></span></th>
-                                            <th class="sortable" data-sort="duedate">Production Due Date <span class="sort-icon"></span></th>
-                                            <th>Actions</th>
+                                            <th class="sortable" data-sort="sku" style="width: 12%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Product Stock Keeping Unit">Product SKU <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="name" style="width: 24%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Product Name">Product Name <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="warehouse" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Current stock level in the warehouse">WH Stock <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="fba" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Current stock level at Amazon FBA">FBA Stock <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="wh_days" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Estimated days until warehouse stock runs out based on 90-day avg sales">WH Days Left <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="fba_days" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Estimated days until FBA stock runs out based on 90-day avg sales">FBA Days Left <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast_30d" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="30-day sales forecast based on last 30 days avg sales + growth factor">Fcst (30d) <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast_60d" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="30-day sales forecast based on last 60 days avg sales + growth factor">Fcst (60d) <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="forecast_90d" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="30-day sales forecast based on last 90 days avg sales + growth factor">Fcst (90d) <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="wh_run_out_date" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Estimated date warehouse stock runs out (based on WH Days Left)">WH Run Out <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="fba_run_out_date" style="width: 6%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Estimated date FBA stock runs out (based on FBA Days Left)">FBA Run Out <span class="sort-icon"></span></th>
+                                            <th class="sortable" data-sort="production_needed" style="width: 5%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Suggested production quantity to meet 90-day target and location minimums (rounded to batch size)">Production Needed <span class="sort-icon"></span></th>
+                                            <th style="width: 5%;" data-bs-toggle="tooltip" data-bs-placement="top" title="Actions for this product (e.g., Create Purchase Order)">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody id="combinedTableBody">
@@ -272,6 +327,12 @@
                                     <input type="number" class="form-control" id="quantity" min="1">
                                 </div>
                                 <div class="mb-3">
+                                    <label for="mmrVersion" class="form-label">MMR Version</label>
+                                    <select class="form-select" id="mmrVersion" required>
+                                        <option value="" disabled selected>Loading versions...</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
                                     <label for="dueDate" class="form-label">Due Date</label>
                                     <input type="date" class="form-control" id="dueDate">
                                 </div>
@@ -296,56 +357,99 @@
                     <h5 class="modal-title" id="productDetailsTitle">Product Sales Analysis</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
+                <div class="modal-body pt-2 pb-3 border-bottom mb-3">
+                    <div class="text-end">
+                        <button type="button" class="btn btn-primary btn-sm" id="modalCreatePoBtn">
+                             <i class="bi bi-plus-circle"></i> Create Production Order
+                        </button>
+                    </div>
+                </div>
                 <div class="modal-body">
+                    <!-- Key Stats Row -->
                     <div class="row mb-4">
-                        <div class="col-md-3">
-                            <div class="product-detail-card card">
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100">
                                 <div class="card-body text-center">
-                                    <div class="stat-label">Current Stock</div>
-                                    <div class="stat-value" id="detailStock">0</div>
+                                    <div class="stat-label">WH Stock</div>
+                                    <div class="stat-value" id="detailWarehouseStock">-</div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
-                            <div class="product-detail-card card">
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100">
                                 <div class="card-body text-center">
-                                    <div class="stat-label">30-Day Forecast</div>
-                                    <div class="stat-value" id="detail30Forecast">0</div>
+                                    <div class="stat-label">FBA Stock</div>
+                                    <div class="stat-value" id="detailFBAStock">-</div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
-                            <div class="product-detail-card card">
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100">
                                 <div class="card-body text-center">
-                                    <div class="stat-label">Production Units</div>
-                                    <div class="stat-value" id="detailProduction">0</div>
+                                    <div class="stat-label">WH Days Left</div>
+                                    <div class="stat-value" id="detailWhDays">-</div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
-                            <div class="product-detail-card card">
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100">
                                 <div class="card-body text-center">
-                                    <div class="stat-label">Production Due Date</div>
-                                    <div class="stat-value" id="detailDueDate">N/A</div>
+                                    <div class="stat-label">FBA Days Left</div>
+                                    <div class="stat-value" id="detailFbaDays">-</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">Fcst (30d)</div>
+                                    <div class="stat-value" id="detail30Forecast">-</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-2 col-sm-4 mb-3">
+                            <div class="product-detail-card card h-100 bg-primary text-white">
+                                <div class="card-body text-center">
+                                    <div class="stat-label text-white">Prod. Needed</div>
+                                    <div class="stat-value text-white" id="detailProdNeeded">-</div>
+                                </div>
+                            </div>
+                        </div>
+                         <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="product-detail-card card h-100">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">WH Run Out Date</div>
+                                    <div class="stat-value fs-5" id="detailWhRunOut">-</div> <!-- Smaller font for date -->
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 col-sm-6 mb-3">
+                            <div class="product-detail-card card h-100">
+                                <div class="card-body text-center">
+                                    <div class="stat-label">FBA Run Out Date</div>
+                                    <div class="stat-value fs-5" id="detailFbaRunOut">-</div> <!-- Smaller font for date -->
                                 </div>
                             </div>
                         </div>
                     </div>
                     
-                    <div class="row">
-                        <div class="col-md-8">
-                            <!-- Sales Trend Chart -->
+                    <!-- Sales Trend Full Width -->
+                    <div class="row mb-4">
+                        <div class="col-12">
                             <div class="product-detail-card card">
                                 <div class="card-body">
                                     <h5 class="card-title">Sales Trend (90 Days)</h5>
-                                    <div class="chart-container">
+                                    <div class="chart-container" style="height: 300px;"> <!-- Increased height slightly -->
                                         <canvas id="salesTrendChart"></canvas>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-4">
-                            <!-- Forecast Comparison Chart -->
+                    </div>
+
+                    <!-- Other Charts Row -->
+                    <div class="row">
+                        <div class="col-md-6">
                             <div class="product-detail-card card">
                                 <div class="card-body">
                                     <h5 class="card-title">Forecast Comparison</h5>
@@ -355,36 +459,20 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    
-                    <div class="row mt-4">
                         <div class="col-md-6">
-                            <!-- Stock vs. Forecast Chart -->
                             <div class="product-detail-card card">
                                 <div class="card-body">
-                                    <h5 class="card-title">Stock vs. Forecast</h5>
+                                    <h5 class="card-title">Stock vs. Forecast (30d)</h5>
                                     <div class="chart-container">
                                         <canvas id="stockForecastChart"></canvas>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-6">
-                            <!-- Production Timeline -->
-                            <div class="product-detail-card card">
-                                <div class="card-body">
-                                    <h5 class="card-title">Production Planning</h5>
-                                    <div class="chart-container">
-                                        <canvas id="productionTimelineChart"></canvas>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 </div>
-                <div class="modal-footer">
+                <div class="modal-footer justify-content-end">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-primary" id="createOrderFromDetail">Create Production Order</button>
                 </div>
             </div>
         </div>
@@ -401,9 +489,14 @@
             
             loadForecastData();
 
+            // Initialize Bootstrap tooltips
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+            var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+              return new bootstrap.Tooltip(tooltipTriggerEl)
+            })
+
             // Event listeners
             document.getElementById('refreshBtn').addEventListener('click', loadForecastData);
-            document.getElementById('createProductionBtn').addEventListener('click', createProductionOrder);
             document.getElementById('searchBtn').addEventListener('click', applyFiltersAndSort);
             document.getElementById('searchInput').addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
@@ -450,6 +543,35 @@
                     }
                 }, 300);
             });
+            
+            // Add event listener for the Create PO button within the production modal
+            const createProductionBtn = document.getElementById('createProductionBtn');
+            if (createProductionBtn) {
+                createProductionBtn.addEventListener('click', createProductionOrder);
+            } else {
+                console.error('Could not find createProductionBtn element.');
+            }
+            
+            // Add event listener for the Create PO button within the details modal
+            const modalCreatePoBtn = document.getElementById('modalCreatePoBtn');
+            if (modalCreatePoBtn) {
+                modalCreatePoBtn.addEventListener('click', () => {
+                    if (currentProductDetail) {
+                        // Close the details modal first
+                        const detailsModalInstance = bootstrap.Modal.getInstance(document.getElementById('productDetailsModal'));
+                        if (detailsModalInstance) {
+                            detailsModalInstance.hide();
+                        }
+                        // Open the production modal, pre-filled
+                        openProductionModal(currentProductDetail.sku, currentProductDetail.productionNeeded);
+                    } else {
+                        console.error('No product details available to create PO.');
+                        alert('Could not determine product to create PO for.');
+                    }
+                });
+            } else {
+                 console.error('Could not find modalCreatePoBtn element.');
+            }
         });
 
         // Global variables for pagination
@@ -462,8 +584,6 @@
             try {
                 document.getElementById('forecastLoading').style.display = 'block';
                 document.getElementById('forecastContent').style.display = 'none';
-                document.getElementById('reordersLoading').style.display = 'block';
-                document.getElementById('reordersContent').style.display = 'none';
                 
                 const response = await authenticatedFetch('/api/forecast', {
                     method: 'POST'
@@ -475,97 +595,64 @@
                 
                 const data = await response.json();
                 
-                // Display forecast and production data in a combined table
-                document.getElementById('forecastLoading').style.display = 'none';
-                document.getElementById('forecastContent').style.display = 'block';
-                
+                console.log('[Forecast JS] Raw response data received:', data); // Log the entire data object
+
+                // Check if forecast data exists before processing
+                if (!data || !data.forecast || typeof data.forecast !== 'object') {
+                    console.error('[Forecast JS] Invalid or missing forecast data in response:', data);
+                    const combinedTableBody = document.getElementById('combinedTableBody');
+                    combinedTableBody.innerHTML = '<tr><td colspan="13" class="text-center text-danger">Error: Failed to load forecast data structure from server.</td></tr>';
+                    // Optionally hide pagination/controls using correct IDs
+                    document.getElementById('paginationContainer').style.display = 'none'; // Corrected ID
+                    document.querySelector('.search-container').style.display = 'none'; // Use querySelector for the class
+                    return; // Stop execution if data is invalid
+                }
+
+                // Ensure controls are visible if data is valid (in case they were hidden before)
+                document.getElementById('paginationContainer').style.display = 'flex'; // Corrected ID
+                document.querySelector('.search-container').style.display = 'flex'; // Use querySelector for the class
+
                 // Process forecast data
                 allForecasts = Object.entries(data.forecast).map(([sku, info]) => {
                     // Log to debug the product names and stock levels
-                    console.log(`Processing forecast item: ${sku}, name: "${info.product_name}", current_stock: ${info.current_stock}`);
-                    
+                    console.log(`Raw data for ${sku}:`, info); // Log the raw info object
+                        
                     return {
                         sku,
                         name: info.product_name || `Product ${sku}`,
-                        forecast: Number(info.units),
-                        forecast_30d: Number(info.forecast_30d),
-                        forecast_60d: Number(info.forecast_60d),
-                        forecast_90d: Number(info.forecast_90d),
-                        current_stock: Number(info.current_stock || 0)
+                        // Original Forecasts (keep for context?)
+                        forecast_30d: Number(info.forecast_30d || 0), // Add defaults
+                        forecast_60d: Number(info.forecast_60d || 0),
+                        forecast_90d: Number(info.forecast_90d || 0),
+                        // Stock
+                        warehouse_stock: Number(info.warehouse_stock || 0),
+                        fba_stock: Number(info.fba_stock || 0),
+                        // Batch Size
+                        batch_size: Number(info.batch_size || 0),
+                        // --- NEW Fields from Backend --- Ensure robust handling
+                        whDaysStockRemaining: (info.whDaysStockRemaining === Infinity || info.whDaysStockRemaining === null || info.whDaysStockRemaining === undefined) ? info.whDaysStockRemaining : Number(info.whDaysStockRemaining), // Keep Infinity/null, otherwise convert to Number
+                        fbaDaysStockRemaining: (info.fbaDaysStockRemaining === Infinity || info.fbaDaysStockRemaining === null || info.fbaDaysStockRemaining === undefined) ? info.fbaDaysStockRemaining : Number(info.fbaDaysStockRemaining), // Keep Infinity/null, otherwise convert to Number
+                        estWhRunOutDate: info.estWhRunOutDate || null, // Add WH date
+                        estFbaRunOutDate: info.estFbaRunOutDate || null, // Add FBA date
+                        productionNeeded: info.productionNeeded === null || info.productionNeeded === undefined ? 0 : Number(info.productionNeeded) // Default to 0 only if null/undefined
                     };
                 });
                 
-                // Create a map of production data
-                const productionMap = {};
-                data.production.forEach(plan => {
-                    // Debug log to check the production data
-                    console.log(`Production item: ${plan.product_id}, name from API: "${plan.product_name}"`);
-                    productionMap[plan.product_id] = plan;
-                });
-                
-                // Store production data with each forecast item
-                allForecasts.forEach(item => {
-                    item.production = productionMap[item.sku] || null;
-                    item.production_units = item.production ? item.production.units : 0;
-                    
-                    // Calculate suggested production due date
-                    const daysOfStockRemaining = item.current_stock / (item.forecast_30d / 30); // How many days current stock will last
-                    let suggestedDate = new Date();
-                    
-                    if (daysOfStockRemaining > 30) {
-                        // If we have more than a month of stock, suggest production in 2 weeks
-                        suggestedDate.setDate(suggestedDate.getDate() + 14);
-                    } else if (daysOfStockRemaining > 14) {
-                        // If we have 2-4 weeks of stock, suggest production next week
-                        suggestedDate.setDate(suggestedDate.getDate() + 7);
-                    } else if (daysOfStockRemaining > 7) {
-                        // If we have 1-2 weeks of stock, suggest production in 3 days
-                        suggestedDate.setDate(suggestedDate.getDate() + 3);
-                    } else {
-                        // If we have less than a week of stock, suggest immediate production
-                        suggestedDate.setDate(suggestedDate.getDate() + 1);
-                    }
-                    
-                    // Only set a due date if production is needed
-                    item.suggested_due_date = item.production ? 
-                        suggestedDate.toISOString().split('T')[0] : null;
-                });
-                
-                // Initial sort by forecast (high to low)
+                // Initial sort by 30-day forecast descending
                 allForecasts.sort((a, b) => b.forecast_30d - a.forecast_30d);
+                
+                // Data loaded successfully, hide loader and show content
+                document.getElementById('forecastLoading').style.display = 'none';
+                document.getElementById('forecastContent').style.display = 'block';
                 
                 // Apply filters and pagination
                 applyFiltersAndSort();
-                
-                // Populate reorders table
-                document.getElementById('reordersLoading').style.display = 'none';
-                document.getElementById('reordersContent').style.display = 'block';
-                
-                const reordersTableBody = document.getElementById('reordersTableBody');
-                reordersTableBody.innerHTML = '';
-                
-                if (data.reorders.length === 0) {
-                    reordersTableBody.innerHTML = '<tr><td colspan="5" class="text-center">No material reorders needed</td></tr>';
-                } else {
-                    data.reorders.forEach(reorder => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${reorder.material}</td>
-                            <td>${reorder.material_name || reorder.material}</td>
-                            <td>${reorder.current_stock || 0}</td>
-                            <td>${reorder.quantity}</td>
-                            <td>${reorder.order_by}</td>
-                        `;
-                        reordersTableBody.appendChild(row);
-                    });
-                }
             } catch (error) {
                 console.error('Error loading forecast data:', error);
                 alert('Failed to load forecast. Check the console for details.');
                 
                 // Hide loading indicators
                 document.getElementById('forecastLoading').style.display = 'none';
-                document.getElementById('reordersLoading').style.display = 'none';
             }
         }
         
@@ -600,34 +687,61 @@
                         aValue = a.name || '';
                         bValue = b.name || '';
                         return isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
-                    case 'stock':
-                        aValue = a.current_stock;
-                        bValue = b.current_stock;
+                    case 'warehouse':
+                        aValue = a.warehouse_stock;
+                        bValue = b.warehouse_stock;
                         return isAsc ? aValue - bValue : bValue - aValue;
-                    case 'forecast30':
+                    case 'fba':
+                        aValue = a.fba_stock;
+                        bValue = b.fba_stock;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'forecast_30d':
                         aValue = a.forecast_30d;
                         bValue = b.forecast_30d;
                         return isAsc ? aValue - bValue : bValue - aValue;
-                    case 'forecast60':
+                    case 'forecast_60d':
                         aValue = a.forecast_60d || 0;
                         bValue = b.forecast_60d || 0;
                         return isAsc ? aValue - bValue : bValue - aValue;
-                    case 'forecast90':
+                    case 'forecast_90d':
                         aValue = a.forecast_90d || 0;
                         bValue = b.forecast_90d || 0;
                         return isAsc ? aValue - bValue : bValue - aValue;
-                    case 'production':
-                        aValue = a.production_units;
-                        bValue = b.production_units;
+                    case 'wh_days':
+                        aValue = a.whDaysStockRemaining; // Use pre-calculated value
+                        bValue = b.whDaysStockRemaining; // Use pre-calculated value
+                        // Handle Infinity (treat as largest number)
+                        if (aValue === Infinity && bValue === Infinity) return 0;
+                        if (aValue === Infinity) return isAsc ? 1 : -1;
+                        if (bValue === Infinity) return isAsc ? -1 : 1;
                         return isAsc ? aValue - bValue : bValue - aValue;
-                    case 'duedate':
-                        // Handle null dates
-                        if (!a.suggested_due_date && !b.suggested_due_date) return 0;
-                        if (!a.suggested_due_date) return isAsc ? 1 : -1;
-                        if (!b.suggested_due_date) return isAsc ? -1 : 1;
-                        
-                        aValue = new Date(a.suggested_due_date);
-                        bValue = new Date(b.suggested_due_date);
+                    case 'fba_days':
+                        aValue = a.fbaDaysStockRemaining; // Use pre-calculated value
+                        bValue = b.fbaDaysStockRemaining; // Use pre-calculated value
+                        // Handle Infinity
+                        if (aValue === Infinity && bValue === Infinity) return 0;
+                        if (aValue === Infinity) return isAsc ? 1 : -1;
+                        if (bValue === Infinity) return isAsc ? -1 : 1;
+                        return isAsc ? aValue - bValue : bValue - aValue;
+                    case 'wh_run_out_date':
+                         aValue = a.estWhRunOutDate; // Use pre-calculated value (can be null)
+                         bValue = b.estWhRunOutDate; // Use pre-calculated value (can be null)
+                         // Handle nulls (treat as latest date)
+                         if (aValue === null && bValue === null) return 0;
+                         if (aValue === null) return isAsc ? 1 : -1; // Place nulls last in ascending
+                         if (bValue === null) return isAsc ? -1 : 1; // Place nulls last in ascending
+                         return isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                    case 'fba_run_out_date':
+                         aValue = a.estFbaRunOutDate; // Use pre-calculated value (can be null)
+                         bValue = b.estFbaRunOutDate; // Use pre-calculated value (can be null)
+                          // Handle nulls (treat as latest date)
+                         if (aValue === null && bValue === null) return 0;
+                         if (aValue === null) return isAsc ? 1 : -1; // Place nulls last in ascending
+                         if (bValue === null) return isAsc ? -1 : 1; // Place nulls last in ascending
+                         return isAsc ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+                    case 'production_needed':
+                        aValue = a.productionNeeded; // Use pre-calculated value
+                        bValue = b.productionNeeded; // Use pre-calculated value
                         return isAsc ? aValue - bValue : bValue - aValue;
                     case 'forecast':
                     default:
@@ -664,7 +778,7 @@
             combinedTableBody.innerHTML = '';
             
             if (filteredForecasts.length === 0) {
-                combinedTableBody.innerHTML = '<tr><td colspan="8" class="text-center">No forecast data available</td></tr>';
+                combinedTableBody.innerHTML = '<tr><td colspan="13" class="text-center">No forecast data available</td></tr>'; // Updated colspan to 13
                 return;
             }
             
@@ -695,50 +809,76 @@
                     return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[c];
                 });
                 
-                row.innerHTML = `
-                    <td><span class="chart-icon" style="margin-right: 5px;"><i class="bi bi-bar-chart-line-fill text-primary"></i></span>${item.sku}</td>
-                    <td>${escapedName || item.sku}</td>
-                    <td>${item.current_stock}</td>
-                    <td>${item.forecast_30d !== null ? item.forecast_30d : 'N/A'}</td>
-                    <td>${item.forecast_60d !== null ? item.forecast_60d : 'N/A'}</td>
-                    <td>${item.forecast_90d !== null ? item.forecast_90d : 'N/A'}</td>
-                    <td>${item.production ? item.production.units : '0'}</td>
-                    <td>${item.suggested_due_date || 'N/A'}</td>
-                    <td>
-                        ${production ? 
-                            `<button class="btn btn-sm btn-primary create-order-btn" 
-                                    data-product-id="${item.sku}" 
-                                    data-units="${production.units}"
-                                    data-due-date="${item.suggested_due_date}">
-                                Create Order
-                            </button>` : 
-                            '<span class="badge bg-success">No Production Needed</span>'}
-                    </td>
-                `;
+                // Helper function to create and append cell
+                const addCell = (content, className = null) => {
+                    const cell = document.createElement('td');
+                    cell.innerHTML = content;
+                    if (className) {
+                        cell.classList.add(className);
+                    }
+                    row.appendChild(cell);
+                    return cell; // Return cell in case we need to modify it further
+                };
+
+                // Function to get days remaining class
+                const WAREHOUSE_MIN_DAYS = 60;
+                const FBA_MIN_DAYS = 90;
+                const WARNING_BUFFER_DAYS = 15; // Show warning if within X days of minimum
+                const getDaysClass = (days, type) => {
+                    if (days === Infinity) return null;
+                    const minDays = (type === 'wh') ? WAREHOUSE_MIN_DAYS : FBA_MIN_DAYS;
+                    if (days < minDays) return 'bg-days-critical';
+                    if (days < minDays + WARNING_BUFFER_DAYS) return 'bg-days-warning';
+                    return null;
+                };
+
+                // Add cells for each column
+                addCell(`<span class="chart-icon" style="margin-right: 5px;"><i class="bi bi-bar-chart-line-fill text-primary"></i></span>${item.sku}`);
+                addCell(escapedName || item.sku);
+                addCell(item.warehouse_stock);
+                addCell(item.fba_stock);
+                addCell(item.whDaysStockRemaining === Infinity ? '∞' : (item.whDaysStockRemaining === null || item.whDaysStockRemaining === undefined ? 'N/A' : item.whDaysStockRemaining), getDaysClass(item.whDaysStockRemaining, 'wh'));
+                addCell(item.fbaDaysStockRemaining === Infinity ? '∞' : (item.fbaDaysStockRemaining === null || item.fbaDaysStockRemaining === undefined ? 'N/A' : item.fbaDaysStockRemaining), getDaysClass(item.fbaDaysStockRemaining, 'fba'));
+                addCell(item.forecast_30d);
+                addCell(item.forecast_60d);
+                addCell(item.forecast_90d);
+                addCell(item.estWhRunOutDate ? item.estWhRunOutDate : 'N/A');
+                addCell(item.estFbaRunOutDate ? item.estFbaRunOutDate : 'N/A');
+                addCell(item.productionNeeded);
+                
+                // Actions Cell with Button
+                const actionsCellContent = item.productionNeeded > 0 ? 
+                    `<button class="btn btn-sm btn-primary create-po-btn" 
+                            data-product-id="${item.sku}" 
+                            data-units="${item.productionNeeded}">
+                        Create PO
+                    </button>` : 
+                    '<span class="text-muted">OK</span>'; // Show OK if no production needed
+                addCell(actionsCellContent);
+
                 combinedTableBody.appendChild(row);
                 
                 // Add row click event - doing this explicitly for each row
                 row.addEventListener('click', function(e) {
                     // Only trigger if we didn't click on a button
-                    if (!e.target.closest('button')) {
+                    if (!e.target.closest('button')) { 
                         console.log(`Row clicked for ${item.sku}!`);
                         showProductDetails(item);
                     }
                 });
             }
             
-            // Add event listeners to Create Order buttons
-            document.querySelectorAll('.create-order-btn').forEach(button => {
+            // Add event listeners to Create PO buttons (Use event delegation later if preferred)
+            document.querySelectorAll('.create-po-btn').forEach(button => {
                 button.addEventListener('click', (e) => {
                     e.stopPropagation(); // Prevent row click event
                     const productId = button.getAttribute('data-product-id');
                     const units = button.getAttribute('data-units');
-                    const dueDate = button.getAttribute('data-due-date');
-                    openProductionModal(productId, units, dueDate);
+                    openProductionModal(productId, units); // Pass SKU and calculated units
                 });
             });
             
-            // Add a direct click handler to the entire table with event delegation
+            // Keep table delegation click handler for row clicks
             combinedTableBody.addEventListener('click', function(e) {
                 // Find the closest tr element from where the event was triggered
                 const row = e.target.closest('tr.product-row');
@@ -814,27 +954,81 @@
             paginationContainer.appendChild(nextLi);
         }
 
-        function openProductionModal(productId, units, dueDate) {
+        async function openProductionModal(productId, units) {
+            // Set known values immediately
             document.getElementById('productSku').value = productId;
-            document.getElementById('quantity').value = units;
+            document.getElementById('quantity').value = units; // Pre-fill with calculated needed units
             
-            // Set due date to suggested date if available, otherwise default to 7 days from now
-            if (dueDate) {
-                document.getElementById('dueDate').value = dueDate;
-            } else {
-                const defaultDate = new Date();
-                defaultDate.setDate(defaultDate.getDate() + 7);
-                document.getElementById('dueDate').value = defaultDate.toISOString().split('T')[0];
-            }
+            // Set default due date to 7 days from now
+            const defaultDate = new Date();
+            defaultDate.setDate(defaultDate.getDate() + 7);
+            document.getElementById('dueDate').value = defaultDate.toISOString().split('T')[0];
             
-            const modal = new bootstrap.Modal(document.getElementById('createProductionModal'));
+            // Clear and show loading state for MMR versions
+            const mmrSelect = document.getElementById('mmrVersion');
+            mmrSelect.innerHTML = '<option value="" disabled selected>Loading versions...</option>';
+            mmrSelect.disabled = true;
+
+            // Show the modal first
+            const modalElement = document.getElementById('createProductionModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalElement); // Use getOrCreateInstance
             modal.show();
+
+            // Fetch MMR versions asynchronously
+            try {
+                const response = await authenticatedFetch(`/api/mmr/versions?sku=${encodeURIComponent(productId)}`);
+                if (!response || !response.ok) {
+                    throw new Error(`Failed to fetch MMR versions (status: ${response?.status})`);
+                }
+                const versions = await response.json(); // Assuming response is like [3, 2, 1] or [{version: 3}, ...]
+                
+                mmrSelect.innerHTML = ''; // Clear loading/error message
+                
+                if (!Array.isArray(versions) || versions.length === 0) {
+                    mmrSelect.innerHTML = '<option value="" disabled selected>No versions found</option>';
+                    return; // Keep disabled
+                }
+
+                // Handle different possible response formats
+                let versionNumbers = [];
+                if (typeof versions[0] === 'object' && versions[0].hasOwnProperty('version')) {
+                    versionNumbers = versions.map(v => v.version);
+                } else if (typeof versions[0] === 'number') {
+                    versionNumbers = versions;
+                }
+
+                if (versionNumbers.length === 0) {
+                     mmrSelect.innerHTML = '<option value="" disabled selected>No valid versions found</option>';
+                    return; // Keep disabled
+                }
+
+                // Sort versions descending (latest first)
+                versionNumbers.sort((a, b) => b - a);
+                
+                versionNumbers.forEach(version => {
+                    const option = document.createElement('option');
+                    option.value = version;
+                    option.textContent = `Version ${version}`;
+                    mmrSelect.appendChild(option);
+                });
+                
+                mmrSelect.disabled = false;
+                if (mmrSelect.options.length > 0) {
+                    mmrSelect.selectedIndex = 0; // Select the latest (first option after sorting)
+                }
+
+            } catch (error) {
+                console.error('Error fetching MMR versions:', error);
+                mmrSelect.innerHTML = '<option value="" disabled selected>Error loading versions</option>';
+                // Keep disabled
+            }
         }
 
         async function createProductionOrder() {
             try {
                 const productSku = document.getElementById('productSku').value;
                 const quantity = document.getElementById('quantity').value;
+                const mmrVersion = document.getElementById('mmrVersion').value;
                 const dueDate = document.getElementById('dueDate').value;
                 
                 // For simplicity, we'll use the product SKU as the MMR as well
@@ -843,7 +1037,7 @@
                     product_sku: productSku,
                     quantity: quantity,
                     mmr_product_sku: productSku,
-                    mmr_version: 1, // Using default version 1
+                    mmr_version: mmrVersion,
                     due_date: dueDate
                 };
                 
@@ -867,7 +1061,7 @@
                 
                 alert('Production order created successfully!');
                 
-                // Refresh forecast data
+                // Refresh forecast data to reflect any potential changes (though this endpoint doesn't directly use POs)
                 loadForecastData();
                 
             } catch (error) {
@@ -880,7 +1074,6 @@
         let salesTrendChart = null;
         let forecastComparisonChart = null;
         let stockForecastChart = null;
-        let productionTimelineChart = null;
         let currentProductDetail = null;
 
         // Function to show product details with charts
@@ -899,26 +1092,15 @@
                 `${item.name || item.sku} (${item.sku}) - Sales Analysis`;
                 
             // Update stat cards
-            document.getElementById('detailStock').textContent = item.current_stock;
+            document.getElementById('detailWarehouseStock').textContent = item.warehouse_stock;
+            document.getElementById('detailFBAStock').textContent = item.fba_stock;
             document.getElementById('detail30Forecast').textContent = item.forecast_30d;
-            document.getElementById('detailProduction').textContent = item.production ? item.production.units : '0';
-            document.getElementById('detailDueDate').textContent = item.suggested_due_date || 'N/A';
-            
-            // Set up create order button
-            const createOrderBtn = document.getElementById('createOrderFromDetail');
-            if (item.production) {
-                createOrderBtn.style.display = 'block';
-                createOrderBtn.onclick = () => {
-                    // Hide the details modal
-                    const detailsModal = bootstrap.Modal.getInstance(document.getElementById('productDetailsModal'));
-                    detailsModal.hide();
-                    
-                    // Open the production order modal
-                    openProductionModal(item.sku, item.production.units, item.suggested_due_date);
-                };
-            } else {
-                createOrderBtn.style.display = 'none';
-            }
+            // Add new stat cards
+            document.getElementById('detailWhDays').textContent = item.whDaysStockRemaining === Infinity ? '∞' : (item.whDaysStockRemaining ?? 'N/A');
+            document.getElementById('detailFbaDays').textContent = item.fbaDaysStockRemaining === Infinity ? '∞' : (item.fbaDaysStockRemaining ?? 'N/A');
+            document.getElementById('detailProdNeeded').textContent = item.productionNeeded ?? 'N/A';
+            document.getElementById('detailWhRunOut').textContent = item.estWhRunOutDate ?? 'N/A';
+            document.getElementById('detailFbaRunOut').textContent = item.estFbaRunOutDate ?? 'N/A';
             
             // Show the modal and render charts
             try {
@@ -931,7 +1113,6 @@
                     renderSalesTrendChart(item);
                     renderForecastComparisonChart(item);
                     renderStockForecastChart(item);
-                    renderProductionTimelineChart(item);
                 }, 300);
             } catch (error) {
                 console.error("Error rendering charts:", error);
@@ -1166,10 +1347,11 @@
             }
             
             // Data
+            const totalStock = item.warehouse_stock + item.fba_stock;
             const data = {
-                labels: ['Current Stock', '30-Day Forecast'],
+                labels: ['Total Stock', '30-Day Forecast'],
                 datasets: [{
-                    data: [item.current_stock, item.forecast_30d],
+                    data: [totalStock, item.forecast_30d],
                     backgroundColor: [
                         'rgba(75, 192, 192, 0.7)',
                         'rgba(255, 99, 132, 0.7)'
@@ -1204,134 +1386,6 @@
             });
         }
         
-        function renderProductionTimelineChart(item) {
-            // Destroy previous chart if it exists
-            if (productionTimelineChart) {
-                productionTimelineChart.destroy();
-                productionTimelineChart = null;
-            }
-            
-            // Get dates for the timeline
-            const today = new Date();
-            const nextMonth = new Date();
-            nextMonth.setDate(today.getDate() + 30);
-            
-            // If we have a suggested due date, use it
-            let dueDate = null;
-            if (item.suggested_due_date) {
-                dueDate = new Date(item.suggested_due_date);
-            }
-            
-            // Calculate when stock runs out based on forecast and current stock
-            const dailyUsage = item.forecast_30d / 30;
-            const daysOfStock = dailyUsage > 0 ? Math.floor(item.current_stock / dailyUsage) : 30;
-            
-            const stockOutDate = new Date();
-            stockOutDate.setDate(today.getDate() + daysOfStock);
-            
-            // Create timeline segments
-            const datasets = [];
-            
-            // Basic timeline showing the next 30 days
-            datasets.push({
-                label: 'Timeline',
-                data: [
-                    {
-                        x: today.toISOString().split('T')[0],
-                        y: 'Timeline'
-                    },
-                    {
-                        x: nextMonth.toISOString().split('T')[0],
-                        y: 'Timeline'
-                    }
-                ],
-                backgroundColor: 'rgba(200, 200, 200, 0.2)',
-                borderColor: 'rgba(200, 200, 200, 0.5)',
-                borderWidth: 1,
-                barPercentage: 0.2
-            });
-            
-            // Current stock period
-            if (daysOfStock > 0 && daysOfStock < 30) {
-                datasets.push({
-                    label: 'Current Stock',
-                    data: [
-                        {
-                            x: today.toISOString().split('T')[0],
-                            y: 'Timeline'
-                        },
-                        {
-                            x: stockOutDate.toISOString().split('T')[0],
-                            y: 'Timeline'
-                        }
-                    ],
-                    backgroundColor: 'rgba(75, 192, 192, 0.7)',
-                    borderColor: 'rgba(75, 192, 192, 1)',
-                    borderWidth: 1,
-                    barPercentage: 0.5
-                });
-            }
-            
-            // Production period if needed
-            if (item.production && dueDate) {
-                datasets.push({
-                    label: 'Production Period',
-                    data: [
-                        {
-                            x: today.toISOString().split('T')[0],
-                            y: 'Timeline'
-                        },
-                        {
-                            x: dueDate.toISOString().split('T')[0],
-                            y: 'Timeline'
-                        }
-                    ],
-                    backgroundColor: 'rgba(255, 159, 64, 0.7)',
-                    borderColor: 'rgba(255, 159, 64, 1)',
-                    borderWidth: 1,
-                    barPercentage: 0.5
-                });
-            }
-            
-            // Create chart
-            const ctx = document.getElementById('productionTimelineChart').getContext('2d');
-            productionTimelineChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    datasets: datasets
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    indexAxis: 'y',
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    const label = context.dataset.label || '';
-                                    if (label === 'Current Stock') {
-                                        return `Stock will last until ${stockOutDate.toLocaleDateString()}`;
-                                    } else if (label === 'Production Period') {
-                                        return `Production due by ${dueDate.toLocaleDateString()}`;
-                                    }
-                                    return label;
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'day'
-                            },
-                            position: 'top'
-                        }
-                    }
-                }
-            });
-        }
-        
         // Function to clean up all chart instances
         function cleanupCharts() {
             if (salesTrendChart) {
@@ -1345,10 +1399,6 @@
             if (stockForecastChart) {
                 stockForecastChart.destroy();
                 stockForecastChart = null;
-            }
-            if (productionTimelineChart) {
-                productionTimelineChart.destroy();
-                productionTimelineChart = null;
             }
             
             // Clean up any lingering modal backdrops

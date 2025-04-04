@@ -19,13 +19,28 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <!-- Production Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only">
-                        <a class="nav-link active" href="/admin.html">Admin</a>
+                    <!-- Admin Dropdown -->
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle active" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item active" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">

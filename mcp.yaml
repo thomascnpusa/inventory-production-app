@@ -1,0 +1,21 @@
+version: 1.0
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: thomaspoole
+      POSTGRES_PASSWORD: 3414
+      POSTGRES_DB: inventory_production_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thomaspoole -d inventory_production_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data: 

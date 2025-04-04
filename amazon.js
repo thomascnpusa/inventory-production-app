@@ -33,7 +33,7 @@ async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-class AmazonIntegration {
+class AmazonAPI {
     constructor() {
         this.refreshToken = process.env.AMAZON_REFRESH_TOKEN;
         this.clientId = process.env.AMAZON_CLIENT_ID;
@@ -423,7 +423,272 @@ class AmazonIntegration {
             throw new Error(`Insufficient inventory for SKU ${sku}`);
         }
     }
+
+    async fetchFBAInventory() {
+        try {
+            console.log('Starting FBA inventory sync');
+            const accessToken = await this.getAccessToken();
+            const client = await pgPool.connect();
+            
+            try {
+                // Get all SKU mappings for Amazon
+                const mappingsResult = await client.query(
+                    `SELECT internal_sku, platform_sku 
+                    FROM SkuMapping
+                    WHERE platform = 'amazon' 
+                    AND confidence = 1`
+                );
+                
+                if (mappingsResult.rows.length === 0) {
+                    console.log('No SKU mappings found for Amazon');
+                    return { success: false, message: 'No SKU mappings found' };
+                }
+                
+                console.log(`Found ${mappingsResult.rows.length} SKU mappings for Amazon`);
+                
+                // Process in batches of 50 SKUs
+                const batchSize = 50;
+                const batches = [];
+                for (let i = 0; i < mappingsResult.rows.length; i += batchSize) {
+                    batches.push(mappingsResult.rows.slice(i, i + batchSize));
+                }
+                
+                console.log(`Processing ${batches.length} batches of SKUs`);
+                
+                let totalUpdated = 0;
+                let totalSkipped = 0;
+                
+                // Process each batch
+                for (const batch of batches) {
+                    // We'll only check the US marketplace since that's where our FBA inventory is
+                    const marketplaceConfig = AMAZON_MARKETPLACES['US'];
+                    console.log(`Fetching FBA inventory for US marketplace - Batch of ${batch.length} SKUs`);
+                    
+                    try {
+                        // Get inventory summary first
+                        const endpoint = `${marketplaceConfig.endpoint}/fba/inventory/v1/summaries`;
+                        const response = await axios.get(endpoint, {
+                            headers: {
+                                'x-amz-access-token': accessToken,
+                                'Content-Type': 'application/json'
+                            },
+                            params: {
+                                marketplaceIds: marketplaceConfig.marketplaceId,
+                                sellerSkus: batch.map(m => m.platform_sku).join(','),
+                                granularityType: 'Marketplace',
+                                granularityId: marketplaceConfig.marketplaceId
+                            },
+                            paramsSerializer: params => {
+                                return Object.entries(params)
+                                    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+                                    .join('&');
+                            }
+                        });
+                        
+                        console.log(`Retrieved FBA inventory data for US - Batch of ${batch.length} SKUs`);
+                        
+                        // Process inventory data
+                        const inventoryItems = response.data?.payload?.inventorySummaries || [];
+                        
+                        for (const mapping of batch) {
+                            const item = inventoryItems.find(item => item.sellerSku === mapping.platform_sku);
+                            
+                            let fbaInventory = 0;
+                            let fbaAvailable = 0;
+                            let fbaInbound = 0;
+                            let fbaReserved = 0;
+                            let fbaUnfulfillable = 0;
+                            let asin = null;
+                            let condition = null;
+                            let productName = null;
+                            
+                            if (item) {
+                                // Item found in API response, parse inventory metrics
+                                fbaInventory = parseInt(item.totalQuantity || 0);
+                                fbaAvailable = fbaInventory; // Assume available = total for summaries endpoint
+                                asin = item.asin || null;
+                                condition = item.condition || null;
+                                productName = item.productName || null;
+                                
+                                console.log(`Found FBA inventory for ${mapping.internal_sku} (${mapping.platform_sku}):`, {
+                                    Total: fbaInventory,
+                                    Available: fbaAvailable,
+                                    ASIN: asin
+                                });
+                                totalUpdated++;
+                            } else {
+                                // Item not found in API response for this batch
+                                console.log(`No inventory found via API for Amazon SKU ${mapping.platform_sku} (Internal: ${mapping.internal_sku}). Setting FBA fields to 0.`);
+                                // FBA fields remain 0 as initialized above
+                                totalSkipped++; // Or maybe rename this counter? This is an update, just to zero.
+                            }
+                            
+                            // Log values just before DB update
+                            console.log(`DB UPDATE PREP for ${mapping.internal_sku}: Setting fba_inventory=${fbaInventory}, fba_available=${fbaAvailable}`);
+                            
+                            // Update the database regardless of whether the item was found in the API response
+                            await client.query(
+                                `UPDATE InventoryItems 
+                                SET fba_inventory = $1, 
+                                    fba_available = $2,
+                                    fba_inbound = $3,
+                                    fba_reserved = $4,
+                                    fba_unfulfillable = $5,
+                                    fba_asin = $6,
+                                    fba_condition = $7,
+                                    fba_product_name = $8,
+                                    last_fba_update = CURRENT_TIMESTAMP 
+                                WHERE sku = $9`,
+                                [
+                                    fbaInventory, 
+                                    fbaAvailable,
+                                    fbaInbound, // Still 0 based on summaries endpoint limitations
+                                    fbaReserved, // Still 0 based on summaries endpoint limitations
+                                    fbaUnfulfillable, // Still 0 based on summaries endpoint limitations
+                                    asin,
+                                    condition,
+                                    productName,
+                                    mapping.internal_sku
+                                ]
+                            );
+                        }
+                        
+                        // Add a small delay to avoid rate limiting
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+                    } catch (error) {
+                        console.error(`Error fetching FBA inventory for batch:`, error.message);
+                        console.error('Error response:', error.response?.data);
+                        // Continue with next batch even if this one failed
+                        continue;
+                    }
+                }
+                
+                console.log(`FBA inventory sync complete. Updated: ${totalUpdated}, Skipped: ${totalSkipped}`);
+                return { success: true, updated: totalUpdated, skipped: totalSkipped };
+                
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            console.error('Error in fetchFBAInventory:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async updateSingleFbaInventory(internalSku, amazonSku) {
+        try {
+            console.log(`Updating FBA inventory for internal SKU ${internalSku} with Amazon SKU ${amazonSku}`);
+            const accessToken = await this.getAccessToken();
+            const client = await pgPool.connect();
+            
+            try {
+                // We'll only check the US marketplace since that's where our FBA inventory is
+                const marketplaceConfig = AMAZON_MARKETPLACES['US'];
+                console.log(`Fetching FBA inventory for US marketplace`);
+                
+                try {
+                    // Get inventory summary first
+                    const endpoint = `${marketplaceConfig.endpoint}/fba/inventory/v1/summaries`;
+                    const response = await axios.get(endpoint, {
+                        headers: {
+                            'x-amz-access-token': accessToken,
+                            'Content-Type': 'application/json'
+                        },
+                        params: {
+                            marketplaceIds: marketplaceConfig.marketplaceId,
+                            sellerSkus: amazonSku,
+                            granularityType: 'Marketplace',
+                            granularityId: marketplaceConfig.marketplaceId
+                        },
+                        paramsSerializer: params => {
+                            return Object.entries(params)
+                                .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+                                .join('&');
+                        }
+                    });
+                    
+                    console.log(`Retrieved FBA inventory data for US`);
+                    console.log('Raw response:', JSON.stringify(response.data, null, 2));
+                    
+                    // Process inventory data
+                    const inventoryItems = response.data?.payload?.inventorySummaries || [];
+                    const item = inventoryItems.find(item => item.sellerSku === amazonSku);
+                    
+                    if (!item) {
+                        console.log(`No inventory found for SKU ${amazonSku}`);
+                        return { success: false, message: 'No FBA inventory found for this SKU' };
+                    }
+                    
+                    // Parse inventory metrics
+                    const fbaInventory = parseInt(item.totalQuantity || 0);
+                    const fbaAvailable = fbaInventory; // Set available to total quantity since we don't have detailed breakdown
+                    const fbaInbound = 0; // Not available in summaries endpoint
+                    const fbaReserved = 0; // Not available in summaries endpoint
+                    const fbaUnfulfillable = 0; // Not available in summaries endpoint
+                    
+                    console.log(`Updating FBA inventory for ${internalSku} (${amazonSku}):`, {
+                        Total: fbaInventory,
+                        Available: fbaAvailable,
+                        Inbound: fbaInbound,
+                        Reserved: fbaReserved,
+                        Unfulfillable: fbaUnfulfillable
+                    });
+                    
+                    // Update the database
+                    await client.query(
+                        `UPDATE InventoryItems 
+                        SET fba_inventory = $1, 
+                            fba_available = $2,
+                            fba_inbound = $3,
+                            fba_reserved = $4,
+                            fba_unfulfillable = $5,
+                            fba_asin = $6,
+                            fba_condition = $7,
+                            fba_product_name = $8,
+                            last_fba_update = CURRENT_TIMESTAMP 
+                        WHERE sku = $9`,
+                        [
+                            fbaInventory, 
+                            fbaAvailable,
+                            fbaInbound,
+                            fbaReserved,
+                            fbaUnfulfillable,
+                            item.asin || null,
+                            item.condition || null,
+                            item.productName || null,
+                            internalSku
+                        ]
+                    );
+                    
+                    return { 
+                        success: true, 
+                        fbaInventory,
+                        fbaAvailable,
+                        fbaInbound,
+                        fbaReserved,
+                        fbaUnfulfillable
+                    };
+                } catch (error) {
+                    console.error(`Error fetching FBA inventory:`, error.message);
+                    console.error('Error response:', error.response?.data);
+                    return { success: false, error: error.message };
+                }
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            console.error('Error updating single FBA inventory:', error);
+            return { success: false, error: error.message };
+        }
+    }
 }
 
-module.exports = new AmazonIntegration();
+// Export the AmazonAPI class and a singleton instance
+module.exports = AmazonAPI;
+// Create a singleton instance
+const amazonInstance = new AmazonAPI();
+// Export the singleton instance
+module.exports.amazonInstance = amazonInstance;
+// Export the AMAZON_MARKETPLACES constant
 module.exports.AMAZON_MARKETPLACES = AMAZON_MARKETPLACES;

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMR Debug Page</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <script src="/js/auth.js"></script>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>MMR Debug Page</h1>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="text" id="productSkuInput" class="form-control" placeholder="Enter product SKU">
+                    <button id="searchButton" class="btn btn-primary">Search</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <button id="listAllButton" class="btn btn-secondary">List All MMRs</button>
+            </div>
+        </div>
+        
+        <div class="alert alert-info" id="infoMessage" style="display: none;"></div>
+        <div class="alert alert-danger" id="errorMessage" style="display: none;"></div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">MMR Data</h3>
+            </div>
+            <div class="card-body">
+                <div id="resultsContainer">
+                    <p>Enter a product SKU or list all MMRs.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const searchButton = document.getElementById('searchButton');
+        const listAllButton = document.getElementById('listAllButton');
+        const productSkuInput = document.getElementById('productSkuInput');
+        const resultsContainer = document.getElementById('resultsContainer');
+        
+        searchButton.addEventListener('click', async function() {
+            const sku = productSkuInput.value.trim();
+            if (!sku) {
+                showMessage('Please enter a product SKU', 'error');
+                return;
+            }
+            
+            try {
+                await searchProduct(sku);
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        });
+        
+        listAllButton.addEventListener('click', async function() {
+            try {
+                await listAllMMRs();
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        });
+        
+        productSkuInput.addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                searchButton.click();
+            }
+        });
+        
+        // Initial loading
+        listAllMMRs();
+    });
+    
+    async function searchProduct(sku) {
+        showMessage(`Searching for MMRs with SKU: ${sku}`, 'info');
+        
+        try {
+            // Try the debug endpoint which doesn't require authentication
+            const response = await fetch(`/api/debug/mmr/${encodeURIComponent(sku)}`);
+            const data = await response.json();
+            
+            displayMMRs(data, sku);
+        } catch (error) {
+            showMessage(`Error fetching MMRs: ${error.message}`, 'error');
+        }
+    }
+    
+    async function listAllMMRs() {
+        showMessage('Loading all MMRs...', 'info');
+        
+        try {
+            // Try the debug endpoint which doesn't require authentication
+            const response = await fetch('/api/debug/mmr');
+            const data = await response.json();
+            
+            displayMMRs(data);
+        } catch (error) {
+            showMessage(`Error fetching MMRs: ${error.message}`, 'error');
+        }
+    }
+    
+    function displayMMRs(mmrs, filterSku = null) {
+        const resultsContainer = document.getElementById('resultsContainer');
+        
+        if (!mmrs || (Array.isArray(mmrs) && mmrs.length === 0)) {
+            resultsContainer.innerHTML = '<p>No MMRs found.</p>';
+            return;
+        }
+        
+        // Convert to array if it's not already
+        let mmrArray = Array.isArray(mmrs) ? mmrs : mmrs.items || [mmrs];
+        
+        // Apply filter if specified
+        if (filterSku) {
+            mmrArray = mmrArray.filter(mmr => mmr.product_sku === filterSku || mmr.productSku === filterSku);
+        }
+        
+        if (mmrArray.length === 0) {
+            resultsContainer.innerHTML = '<p>No matching MMRs found.</p>';
+            return;
+        }
+        
+        // Sort by product SKU and version
+        mmrArray.sort((a, b) => {
+            const skuA = (a.product_sku || a.productSku || '').toLowerCase();
+            const skuB = (b.product_sku || b.productSku || '').toLowerCase();
+            
+            if (skuA === skuB) {
+                const versionA = a.version || 0;
+                const versionB = b.version || 0;
+                return versionB - versionA; // Descending version order
+            }
+            
+            return skuA.localeCompare(skuB);
+        });
+        
+        showMessage(`Found ${mmrArray.length} MMRs`, 'info');
+        
+        // Create table for results
+        const table = document.createElement('table');
+        table.className = 'table table-striped table-hover';
+        table.innerHTML = `
+            <thead>
+                <tr>
+                    <th>Product SKU</th>
+                    <th>Version</th>
+                    <th>Created By</th>
+                    <th>Created At</th>
+                    <th>Updated At</th>
+                    <th>Active</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${mmrArray.map(mmr => {
+                    const sku = mmr.product_sku || mmr.productSku;
+                    const version = mmr.version;
+                    const createdBy = mmr.created_by || mmr.createdBy || 'N/A';
+                    const createdAt = mmr.created_at || mmr.createdAt ? new Date(mmr.created_at || mmr.createdAt).toLocaleString() : 'N/A';
+                    const updatedAt = mmr.updated_at || mmr.updatedAt ? new Date(mmr.updated_at || mmr.updatedAt).toLocaleString() : 'N/A';
+                    const isActive = mmr.is_active || mmr.isActive ? 'Yes' : 'No';
+                    
+                    return `
+                        <tr>
+                            <td>${sku}</td>
+                            <td>${version}</td>
+                            <td>${createdBy}</td>
+                            <td>${createdAt}</td>
+                            <td>${updatedAt}</td>
+                            <td>${isActive}</td>
+                            <td>
+                                <a href="/mmr-detail.html?sku=${sku}&version=${version}&mode=view" class="btn btn-sm btn-primary me-1" target="_blank">
+                                    <i class="bi bi-eye"></i> View
+                                </a>
+                                <button class="btn btn-sm btn-info me-1" onclick="testMMR('${sku}', ${version})">
+                                    <i class="bi bi-bug"></i> Test
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        `;
+        
+        resultsContainer.innerHTML = '';
+        resultsContainer.appendChild(table);
+    }
+    
+    function showMessage(message, type = 'info') {
+        const infoElement = document.getElementById('infoMessage');
+        const errorElement = document.getElementById('errorMessage');
+        
+        if (type === 'error') {
+            infoElement.style.display = 'none';
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+        } else {
+            errorElement.style.display = 'none';
+            infoElement.textContent = message;
+            infoElement.style.display = 'block';
+        }
+    }
+    
+    async function testMMR(sku, version) {
+        showMessage(`Testing MMR API: ${sku} version ${version}`, 'info');
+        
+        try {
+            // Test the debug endpoint
+            const response = await fetch(`/api/debug/mmr/${encodeURIComponent(sku)}/${encodeURIComponent(version)}`);
+            const data = await response.json();
+            
+            // Display the full JSON in a pre block
+            const resultsContainer = document.getElementById('resultsContainer');
+            resultsContainer.innerHTML = `
+                <h4>API Response for ${sku} version ${version}</h4>
+                <pre class="bg-dark text-light p-3 rounded">${JSON.stringify(data, null, 2)}</pre>
+                <a href="/mmr-detail.html?sku=${sku}&version=${version}&mode=view" class="btn btn-primary" target="_blank">
+                    <i class="bi bi-eye"></i> View in MMR Detail Page
+                </a>
+            `;
+            
+            showMessage(`Successfully fetched MMR data for ${sku} version ${version}`, 'info');
+        } catch (error) {
+            showMessage(`Error testing MMR: ${error.message}`, 'error');
+        }
+    }
+    </script>
+</body>
+</html> 

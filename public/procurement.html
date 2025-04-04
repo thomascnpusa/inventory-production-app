@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procurement Suggestions</title>
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/navbar.css" rel="stylesheet">
+    <link href="/css/main.css" rel="stylesheet">
+    <style>
+        /* Basic styling, can be expanded */
+        .table {
+            font-size: 14px; /* Slightly larger font */
+        }
+        .table th {
+             vertical-align: top;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="/procurement.html">Procurement</a></li> <!-- Add Procurement link -->
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row mb-4">
+            <div class="col-12">
+                 <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h1 class="mb-1 d-inline-block me-3">Procurement Suggestions</h1>
+                        <p class="text-muted d-inline-block mb-0">Recommended purchase orders for raw materials, packaging, and labels.</p>
+                    </div>
+                    <button id="refreshBtn" class="btn btn-primary flex-shrink-0">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Suggestions
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="card-title mb-0">Items Requiring Procurement</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Add Filters/Search Here Later -->
+
+                        <div id="procurementLoading" class="text-center">
+                            <div class="spinner-border text-info" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading procurement data...</p>
+                        </div>
+
+                        <div id="procurementContent" style="display: none;">
+                            <div class="table-responsive">
+                                <table class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>Item SKU</th>
+                                            <th>Item Name</th>
+                                            <th>Type</th>
+                                            <th>Current Stock</th>
+                                            <th>Proj. Usage</th> <!-- Projected usage based on forecast -->
+                                            <th>Min. Stock</th>
+                                            <th>Suggested Order Qty</th>
+                                            <th>Vendor</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="procurementTableBody">
+                                        <!-- Procurement items will be populated here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <!-- Add Pagination Here Later -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/procurement.js"></script> <!-- Link to the new JS file -->
+</body>
+</html>

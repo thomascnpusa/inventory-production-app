@@ -359,4 +359,20 @@ CREATE TABLE IF NOT EXISTS InventoryReceipts (
 -- Create index for InventoryReceipts
 CREATE INDEX IF NOT EXISTS idx_inventory_receipts_sku ON InventoryReceipts(sku);
 CREATE INDEX IF NOT EXISTS idx_inventory_receipts_batch ON InventoryReceipts(batch_number);
-CREATE INDEX IF NOT EXISTS idx_inventory_receipts_date ON InventoryReceipts(delivery_date); 
+CREATE INDEX IF NOT EXISTS idx_inventory_receipts_date ON InventoryReceipts(delivery_date);
+
+-- Production Order Test Reports table
+CREATE TABLE IF NOT EXISTS ProductionOrderTestReports (
+    id SERIAL PRIMARY KEY,
+    production_order_id INTEGER NOT NULL REFERENCES ProductionOrders(id) ON DELETE CASCADE,
+    filename VARCHAR(255) NOT NULL,         -- The name of the file as stored on the server (could be sanitized/unique)
+    original_filename VARCHAR(255) NOT NULL, -- The original name of the uploaded file
+    file_path VARCHAR(512) NOT NULL UNIQUE,  -- The path where the file is stored on the server's filesystem
+    mime_type VARCHAR(50) DEFAULT 'application/pdf',
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    uploaded_by_user_id INTEGER REFERENCES Users(id) -- Optional: track who uploaded
+);
+
+-- Create indexes for faster lookups
+CREATE INDEX IF NOT EXISTS idx_prod_test_reports_order_id ON ProductionOrderTestReports(production_order_id);
+CREATE INDEX IF NOT EXISTS idx_prod_test_reports_filename ON ProductionOrderTestReports(filename); 

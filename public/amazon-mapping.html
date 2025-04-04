@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon SKU Mapping</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .inventory-status-good { color: #28a745; }
+        .inventory-status-warning { color: #ffc107; }
+        .inventory-status-danger { color: #dc3545; }
+        .inventory-detail-row { font-size: 0.9em; background-color: rgba(0,0,0,0.02); }
+        .inventory-progress {
+            height: 10px;
+            margin-bottom: 10px;
+        }
+        .inventory-tooltip {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/index.html">Inventory & Production</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
+                    <!-- Production Dropdown -->
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
+                    <!-- Admin Dropdown -->
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item active" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
+                    </li>
+                </ul>
+                <div class="ms-auto">
+                    <span id="usernameDisplay" class="me-2"></span>
+                    <button id="logoutBtn" class="btn btn-outline-danger btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <div class="container mt-4">
+        <h1>Amazon SKU Mapping</h1>
+        <p>Use this form to map Amazon SKUs to your internal SKUs.</p>
+        
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Add New Amazon SKU Mapping</h5>
+                <form id="mapping-form">
+                    <div class="row mb-3">
+                        <div class="col-md-5">
+                            <label for="amazon-sku" class="form-label">Amazon SKU</label>
+                            <input type="text" class="form-control" id="amazon-sku" required>
+                            <div class="form-text">The SKU used in Amazon Seller Central</div>
+                        </div>
+                        <div class="col-md-5">
+                            <label for="internal-sku" class="form-label">Internal SKU</label>
+                            <input type="text" class="form-control" id="internal-sku" required>
+                            <div class="form-text">Your internal SKU for this product</div>
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary w-100">Add Mapping</button>
+                        </div>
+                    </div>
+                </form>
+                <div id="result-message" class="alert d-none"></div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Existing Mappings</h5>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Amazon SKU</th>
+                                <th>Internal SKU</th>
+                                <th>Product Name</th>
+                                <th>FBA Inventory</th>
+                                <th>Last Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappings-table">
+                            <tr>
+                                <td colspan="6" class="text-center">Loading mappings...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- FBA Detail Modal -->
+    <div class="modal fade" id="fbaDetailModal" tabindex="-1" aria-labelledby="fbaDetailModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="fbaDetailModalLabel">FBA Inventory Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="fbaDetailModalBody">
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add mapping form submission
+            const form = document.getElementById('mapping-form');
+            const resultMessage = document.getElementById('result-message');
+            
+            form.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const amazonSku = document.getElementById('amazon-sku').value.trim();
+                const internalSku = document.getElementById('internal-sku').value.trim();
+                
+                try {
+                    const response = await fetch('/api/mapping/amazon', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            amazonSku,
+                            internalSku
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        resultMessage.textContent = data.message;
+                        resultMessage.classList.remove('d-none', 'alert-danger');
+                        resultMessage.classList.add('alert-success');
+                        form.reset();
+                        loadMappings();
+                    } else {
+                        resultMessage.textContent = data.error || 'An error occurred';
+                        resultMessage.classList.remove('d-none', 'alert-success');
+                        resultMessage.classList.add('alert-danger');
+                    }
+                } catch (error) {
+                    resultMessage.textContent = 'Network error. Please try again.';
+                    resultMessage.classList.remove('d-none', 'alert-success');
+                    resultMessage.classList.add('alert-danger');
+                }
+            });
+            
+            // Initialize Bootstrap Modal
+            const fbaModal = new bootstrap.Modal(document.getElementById('fbaDetailModal'));
+            
+            // Load existing mappings
+            loadMappings();
+            
+            async function loadMappings() {
+                const tableBody = document.getElementById('mappings-table');
+                
+                try {
+                    const response = await fetch('/api/mapping?platform=amazon');
+                    const data = await response.json();
+                    
+                    if (response.ok && data.mappings.length > 0) {
+                        let html = '';
+                        
+                        for (const mapping of data.mappings) {
+                            html += `
+                                <tr>
+                                    <td>${mapping.platform_sku}</td>
+                                    <td>${mapping.internal_sku || '-'}</td>
+                                    <td>${mapping.product_name || '-'}</td>
+                                    <td>
+                                        <span class="fba-total" data-sku="${mapping.internal_sku}">Loading...</span>
+                                        <a href="#" class="ms-2 view-details" data-sku="${mapping.internal_sku}" title="View Details">
+                                            <i class="bi bi-info-circle"></i> Details
+                                        </a>
+                                    </td>
+                                    <td>${mapping.internal_sku ? new Date(mapping.updated_at).toLocaleString() : '-'}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-outline-primary sync-now" data-sku="${mapping.internal_sku}" data-amazon-sku="${mapping.platform_sku}">
+                                            Sync Now
+                                        </button>
+                                    </td>
+                                </tr>
+                            `;
+                        }
+                        
+                        tableBody.innerHTML = html;
+                        
+                        // Add event listeners
+                        document.querySelectorAll('.view-details').forEach(link => {
+                            link.addEventListener('click', (e) => {
+                                e.preventDefault();
+                                const sku = link.getAttribute('data-sku');
+                                showFbaDetails(sku);
+                            });
+                        });
+                        
+                        document.querySelectorAll('.sync-now').forEach(button => {
+                            button.addEventListener('click', async (e) => {
+                                e.preventDefault();
+                                const sku = button.getAttribute('data-sku');
+                                const amazonSku = button.getAttribute('data-amazon-sku');
+                                if (sku && amazonSku) {
+                                    button.disabled = true;
+                                    button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Syncing...';
+                                    await syncSku(sku, amazonSku);
+                                    button.disabled = false;
+                                    button.innerHTML = 'Sync Now';
+                                    loadFbaInventory(sku);
+                                }
+                            });
+                        });
+                        
+                        // Load FBA inventory for each SKU
+                        for (const mapping of data.mappings) {
+                            if (mapping.internal_sku) {
+                                loadFbaInventory(mapping.internal_sku);
+                            }
+                        }
+                    } else {
+                        tableBody.innerHTML = '<tr><td colspan="6" class="text-center">No mappings found</td></tr>';
+                    }
+                } catch (error) {
+                    tableBody.innerHTML = '<tr><td colspan="6" class="text-center">Error loading mappings</td></tr>';
+                }
+            }
+            
+            async function loadFbaInventory(sku) {
+                try {
+                    const response = await fetch(`/api/inventory/${sku}`);
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        // Update total
+                        const totalElements = document.querySelectorAll(`.fba-total[data-sku="${sku}"]`);
+                        for (const element of totalElements) {
+                            if (data.fba_details && data.fba_details.total) {
+                                const fbaTotal = data.fba_details.total;
+                                const fbaAvailable = data.fba_details.available;
+                                
+                                // Determine status based on available inventory
+                                let statusClass = 'inventory-status-good';
+                                if (fbaAvailable <= 5) {
+                                    statusClass = 'inventory-status-danger';
+                                } else if (fbaAvailable <= 20) {
+                                    statusClass = 'inventory-status-warning';
+                                }
+                                
+                                element.textContent = `${fbaTotal}`;
+                                element.className = `fba-total ${statusClass}`;
+                                
+                                // Add a small badge if unfulfillable > 0
+                                if (data.fba_details.unfulfillable > 0) {
+                                    element.innerHTML += ` <span class="badge bg-danger" title="${data.fba_details.unfulfillable} unfulfillable units">!</span>`;
+                                }
+                            } else {
+                                element.textContent = '0';
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error loading FBA inventory:', error);
+                }
+            }
+            
+            async function showFbaDetails(sku) {
+                const modalBody = document.getElementById('fbaDetailModalBody');
+                modalBody.innerHTML = `
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                `;
+                
+                fbaModal.show();
+                
+                try {
+                    const response = await fetch(`/api/inventory/${sku}`);
+                    const data = await response.json();
+                    
+                    if (response.ok && data.fba_details) {
+                        const fba = data.fba_details;
+                        const lastUpdate = new Date(fba.last_update || Date.now()).toLocaleString();
+                        
+                        // Calculate percentages for progress bars
+                        const totalInventory = fba.total || 0;
+                        const availablePercent = totalInventory > 0 ? (fba.available / totalInventory * 100) : 0;
+                        const inboundPercent = totalInventory > 0 ? (fba.inbound / totalInventory * 100) : 0;
+                        const reservedPercent = totalInventory > 0 ? (fba.reserved / totalInventory * 100) : 0;
+                        const unfulfillablePercent = totalInventory > 0 ? (fba.unfulfillable / totalInventory * 100) : 0;
+                        
+                        modalBody.innerHTML = `
+                            <h5 class="mb-3">${data.name || sku}</h5>
+                            <div class="row mb-4">
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-body text-center">
+                                            <h6>Total FBA Inventory</h6>
+                                            <h2>${fba.total || 0}</h2>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-body text-center">
+                                            <h6>Available</h6>
+                                            <h2 class="${fba.available <= 5 ? 'text-danger' : fba.available <= 20 ? 'text-warning' : 'text-success'}">${fba.available || 0}</h2>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Available</span>
+                                    <span>${fba.available || 0}</span>
+                                </div>
+                                <div class="progress inventory-progress">
+                                    <div class="progress-bar bg-success" style="width: ${availablePercent}%" aria-valuenow="${fba.available}" aria-valuemin="0" aria-valuemax="${totalInventory}"></div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Inbound</span>
+                                    <span>${fba.inbound || 0}</span>
+                                </div>
+                                <div class="progress inventory-progress">
+                                    <div class="progress-bar bg-info" style="width: ${inboundPercent}%" aria-valuenow="${fba.inbound}" aria-valuemin="0" aria-valuemax="${totalInventory}"></div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Reserved</span>
+                                    <span>${fba.reserved || 0}</span>
+                                </div>
+                                <div class="progress inventory-progress">
+                                    <div class="progress-bar bg-warning" style="width: ${reservedPercent}%" aria-valuenow="${fba.reserved}" aria-valuemin="0" aria-valuemax="${totalInventory}"></div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Unfulfillable</span>
+                                    <span>${fba.unfulfillable || 0}</span>
+                                </div>
+                                <div class="progress inventory-progress">
+                                    <div class="progress-bar bg-danger" style="width: ${unfulfillablePercent}%" aria-valuenow="${fba.unfulfillable}" aria-valuemin="0" aria-valuemax="${totalInventory}"></div>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-4 small text-muted">
+                                <p><strong>ASIN:</strong> ${fba.asin || 'N/A'}</p>
+                                <p><strong>Product Name:</strong> ${fba.product_name || 'N/A'}</p>
+                                <p><strong>Condition:</strong> ${fba.condition || 'N/A'}</p>
+                                <p><strong>Last Updated:</strong> ${lastUpdate}</p>
+                            </div>
+                        `;
+                    } else {
+                        modalBody.innerHTML = `<div class="alert alert-warning">No FBA inventory details available for this SKU.</div>`;
+                    }
+                } catch (error) {
+                    console.error('Error loading FBA details:', error);
+                    modalBody.innerHTML = `<div class="alert alert-danger">Error loading inventory details: ${error.message}</div>`;
+                }
+            }
+            
+            async function syncSku(internalSku, amazonSku) {
+                try {
+                    const response = await fetch('/api/mapping/amazon', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            amazonSku,
+                            internalSku
+                        })
+                    });
+                    
+                    return await response.json();
+                } catch (error) {
+                    console.error('Error syncing SKU:', error);
+                    return { success: false, error: error.message };
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

@@ -4,6 +4,11 @@ console.log('mmr.js loaded at', new Date().toISOString());
 // First, immediately execute a script block to ensure the file is loaded
 console.log('mmr.js file is loading');
 
+// Expose functions to the global scope for HTML event handlers
+window.addSubStep = addSubStep;
+window.addQCStep = addQCStep;
+window.selectProductForNewMMR = selectProductForNewMMR;
+
 // Load MMR data when the page loads
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('MMR.js: DOMContentLoaded');
@@ -23,6 +28,28 @@ document.addEventListener('DOMContentLoaded', async function() {
         
         // Pre-fetch inventory data
         await fetchInventoryData();
+        
+        // Check if we should search for a specific product from URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const searchSku = urlParams.get('search');
+        
+        if (searchSku) {
+            console.log(`Auto-searching for requested product: ${searchSku}`);
+            searchProducts(searchSku);
+            
+            // Set the search input if it exists
+            if ($('#productSearchInput').length) {
+                const select = $('#productSearchInput');
+                const existingOption = select.find(`option[value="${searchSku}"]`);
+                if (existingOption.length) {
+                    select.val(searchSku).trigger('change');
+                } else {
+                    // Create a temporary option until the real data loads
+                    const option = new Option(searchSku, searchSku, true, true);
+                    select.append(option).trigger('change');
+                }
+            }
+        }
     } catch (error) {
         console.error('Error during MMR page initialization:', error);
         showError('Failed to initialize page: ' + error.message);
@@ -47,19 +74,38 @@ async function initializeProductAutocomplete() {
     try {
         console.log('Initializing product autocomplete');
         // Get all finished goods from inventory
-        let inventory = await fetchInventoryData();
-        if (!inventory || !Array.isArray(inventory)) {
-            console.error('Invalid inventory data:', inventory);
+        let inventoryResponse = await fetchInventoryData();
+        console.log('Raw inventory response:', inventoryResponse);
+        
+        // Check if the response has the expected structure
+        let inventory = [];
+        if (inventoryResponse && inventoryResponse.items && Array.isArray(inventoryResponse.items)) {
+            inventory = inventoryResponse.items;
+        } else if (Array.isArray(inventoryResponse)) {
+            inventory = inventoryResponse;
+        } else {
+            console.error('Invalid inventory data format:', inventoryResponse);
             showError('Could not load inventory data properly.');
             return;
         }
         
         console.log(`Loaded ${inventory.length} inventory items`);
         
-        const finishedGoods = inventory.filter(item => 
-            item.type && item.type.toLowerCase().replace(/\s+/g, '') === 'finishedgood'
-        );
+        // Since fetchInventoryData already filters for finished goods, we use all items directly
+        const finishedGoods = inventory;
+        
         console.log(`Found ${finishedGoods.length} finished goods`);
+        
+        if (finishedGoods.length === 0) {
+            console.warn('No finished goods found in inventory');
+            // Log some samples to understand the data structure
+            if (inventory.length > 0) {
+                console.log('Sample inventory items:');
+                inventory.slice(0, 3).forEach((item, idx) => {
+                    console.log(`Item ${idx}:`, item);
+                });
+            }
+        }
 
         // Make sure jQuery and Select2 are loaded
         if (typeof $ === 'undefined' || typeof $.fn.select2 === 'undefined') {
@@ -79,7 +125,6 @@ async function initializeProductAutocomplete() {
                 text: `${product.name} (${product.sku})`,
                 product: product
             })),
-            // Improve the rendering
             templateResult: formatProduct,
             templateSelection: formatProductSelection
         });
@@ -108,6 +153,14 @@ async function initializeProductAutocomplete() {
 // Format product for dropdown
 function formatProduct(product) {
     if (!product.id) return product.text;
+    
+    // Handle the case where product.product might be undefined
+    if (!product.product) {
+        return $(`<div>
+            <strong>${product.text}</strong>
+        </div>`);
+    }
+    
     return $(`<div>
         <strong>${product.product.name}</strong>
         <br><small class="text-muted">SKU: ${product.product.sku}</small>
@@ -117,45 +170,99 @@ function formatProduct(product) {
 // Format selected product
 function formatProductSelection(product) {
     if (!product.id) return product.text;
+    
+    // Handle the case where product.product might be undefined
+    if (!product.product) {
+        return product.text;
+    }
+    
     return `${product.product.name} (${product.id})`;
 }
 
 // Helper function to fetch inventory data
 async function fetchInventoryData() {
     try {
-        // First try the authenticated route
-        console.log('Attempting to fetch inventory data');
-        const response = await authenticatedFetch('/api/inventory');
+        // Use the type endpoint directly since we know it works
+        console.log('Fetching finished goods inventory directly from type endpoint');
+        const response = await authenticatedFetch('/api/inventory/type/Finished%20Good');
+        
         if (response && response.ok) {
             const data = await response.json();
-            console.log('Successfully fetched inventory data');
-            return data;
-        } else if (response) {
-            console.error('Inventory API returned error status:', response.status);
-            throw new Error(`Inventory API error: ${response.status}`);
-        }
-    } catch (authError) {
-        console.error('Authenticated inventory fetch failed:', authError);
-        
-        // Fall back to the debug route if authentication fails
-        try {
-            console.log('Trying debug inventory endpoint as fallback');
-            const debugResponse = await fetch('/api/debug/inventory');
-            if (debugResponse.ok) {
-                const data = await debugResponse.json();
-                console.log('Successfully fetched inventory data from debug endpoint');
-                return data;
+            console.log('Successfully fetched finished goods data');
+            
+            // Process the data based on response structure
+            let finishedGoods = [];
+            if (data && data.items && Array.isArray(data.items)) {
+                finishedGoods = data.items;
+            } else if (Array.isArray(data)) {
+                finishedGoods = data;
             } else {
-                console.error('Debug inventory API error:', debugResponse.status);
-                throw new Error(`Debug inventory API error: ${debugResponse.status}`);
+                console.error('Unexpected inventory data format:', data);
+                return { items: [] };
             }
-        } catch (debugError) {
-            console.error('Debug inventory fetch failed:', debugError);
-            showError('Could not load inventory data. Please check your connection and try again.');
-            return [];
+            
+            console.log(`Found ${finishedGoods.length} finished goods directly from endpoint`);
+            
+            // If we didn't get any items, try the lowercase variation as a fallback
+            if (finishedGoods.length === 0) {
+                console.log('No items found with "Finished Good", trying lowercase variation...');
+                const lowercaseResponse = await authenticatedFetch('/api/inventory/type/finished%20good');
+                if (lowercaseResponse && lowercaseResponse.ok) {
+                    const lowercaseData = await lowercaseResponse.json();
+                    let lowercaseItems = [];
+                    if (lowercaseData && lowercaseData.items && Array.isArray(lowercaseData.items)) {
+                        lowercaseItems = lowercaseData.items;
+                    } else if (Array.isArray(lowercaseData)) {
+                        lowercaseItems = lowercaseData;
+                    }
+                    console.log(`Found ${lowercaseItems.length} items with "finished good" (lowercase)`);
+                    finishedGoods = finishedGoods.concat(lowercaseItems);
+                }
+            }
+            
+            // Return in expected format
+            return { items: finishedGoods };
+        } else if (response) {
+            console.error('Finished goods API returned error status:', response.status);
+            throw new Error(`Finished goods API error: ${response.status}`);
         }
+    } catch (error) {
+        console.error('Finished goods fetch failed:', error);
+        
+        // Fallback to the main inventory endpoint and filter manually
+        try {
+            console.log('Falling back to main inventory endpoint');
+            const fallbackResponse = await authenticatedFetch('/api/inventory');
+            if (fallbackResponse && fallbackResponse.ok) {
+                const data = await fallbackResponse.json();
+                
+                // Process the data
+                let allItems = [];
+                if (data && data.items && Array.isArray(data.items)) {
+                    allItems = data.items;
+                } else if (Array.isArray(data)) {
+                    allItems = data;
+                }
+                
+                // Filter by type with flexible matching
+                const finishedGoods = allItems.filter(item => {
+                    if (!item || !item.type) return false;
+                    
+                    const type = item.type.toLowerCase();
+                    return type.includes('finish') && type.includes('good');
+                });
+                
+                console.log(`Fallback found ${finishedGoods.length} finished goods from ${allItems.length} total items`);
+                
+                return { items: finishedGoods };
+            }
+        } catch (fallbackError) {
+            console.error('Fallback inventory fetch failed:', fallbackError);
+        }
+        
+        // Return empty array wrapped in items property as last resort
+        return { items: [] };
     }
-    return [];
 }
 
 // Search for products and show their MMRs
@@ -166,40 +273,44 @@ async function searchProducts(searchTerm) {
     }
     
     try {
-        // First, search for products
-        let inventory = [];
+        console.log(`Searching for product with term: "${searchTerm}"`);
         
-        try {
-            // First try the authenticated route
-            const inventoryResponse = await authenticatedFetch('/api/inventory');
-            if (inventoryResponse) {
-                inventory = await inventoryResponse.json();
-            }
-        } catch (authError) {
-            console.error('Authenticated inventory fetch failed:', authError);
-            
-            // Fall back to the debug route if authentication fails
-            try {
-                console.log('Trying debug inventory endpoint as fallback');
-                const debugResponse = await fetch('/api/debug/inventory');
-                if (debugResponse.ok) {
-                    inventory = await debugResponse.json();
-                } else {
-                    throw new Error('Failed to fetch inventory from debug endpoint');
-                }
-            } catch (debugError) {
-                console.error('Debug inventory fetch failed:', debugError);
-                showError('Could not load inventory data. Please check your connection and try again.');
-                return;
-            }
+        // First, get all products (should already be filtered to finished goods)
+        let inventoryResponse = await fetchInventoryData();
+        
+        // Extract items from the response structure
+        let inventory = [];
+        if (inventoryResponse && inventoryResponse.items && Array.isArray(inventoryResponse.items)) {
+            inventory = inventoryResponse.items;
+        } else if (Array.isArray(inventoryResponse)) {
+            inventory = inventoryResponse;
+        } else {
+            console.error('Invalid inventory data format:', inventoryResponse);
+            showError('Could not process inventory data properly.');
+            return;
+        }
+        
+        console.log(`Searching among ${inventory.length} inventory items for term "${searchTerm}"`);
+        
+        // If we don't have any items to search, let the user know
+        if (inventory.length === 0) {
+            document.getElementById('mmrSearchResults').innerHTML = `
+                <div class="alert alert-warning">
+                    <strong>No products available to search.</strong> 
+                    <p>There appear to be no finished goods in the inventory system. Please check your inventory data.</p>
+                </div>
+            `;
+            return;
         }
         
         // Determine if searchTerm is a SKU or a search string
-        const isExactSku = inventory.some(item => item.sku && item.sku.toLowerCase() === searchTerm.toLowerCase());
+        const searchTermLower = searchTerm.toLowerCase();
+        const isExactSku = inventory.some(item => 
+            item.sku && item.sku.toLowerCase() === searchTermLower
+        );
         
         // Filter products based on search term
-        let matchingProducts;
-        const searchTermLower = searchTerm.toLowerCase();
+        let matchingProducts = [];
         
         if (isExactSku) {
             // If it's an exact SKU match, only show that product
@@ -209,11 +320,14 @@ async function searchProducts(searchTerm) {
             console.log(`Exact SKU match found for "${searchTerm}"`);
         } else {
             // Otherwise, search in both SKU and name
-            matchingProducts = inventory.filter(item => 
-                (item.type && item.type.toLowerCase().replace(/\s+/g, '') === 'finishedgood') &&
-                (item.sku.toLowerCase().includes(searchTermLower) || 
-                 item.name.toLowerCase().includes(searchTermLower))
-            );
+            matchingProducts = inventory.filter(item => {
+                if (!item.sku || !item.name) return false;
+                
+                return (
+                    item.sku.toLowerCase().includes(searchTermLower) || 
+                    item.name.toLowerCase().includes(searchTermLower)
+                );
+            });
         }
         
         console.log(`Found ${matchingProducts.length} matching products for search term "${searchTerm}"`);
@@ -227,69 +341,79 @@ async function searchProducts(searchTerm) {
             return;
         }
         
-        // Now get all MMRs
+        // Now get all MMRs for these products
         let mmrs = [];
         
-        try {
-            // First try the authenticated route
-            const mmrResponse = await authenticatedFetch('/api/mmr');
-            if (mmrResponse) {
-                mmrs = await mmrResponse.json();
-                console.log(`Retrieved ${mmrs.length} MMRs from API`);
-                
-                if (mmrs.length > 0) {
-                    // Log the first MMR to see its structure
-                    console.log('Sample MMR data:', mmrs[0]);
-                    
-                    // Log available product SKUs in MMR data
-                    const mmrSkus = [...new Set(mmrs.map(mmr => mmr.product_sku || mmr.productSku))];
-                    console.log('Available MMR product SKUs:', mmrSkus);
-                }
-            }
-        } catch (authError) {
-            console.error('Authenticated MMR fetch failed:', authError);
-            
+        // For each product, get its MMRs directly - this ensures better matches
+        for (const product of matchingProducts) {
             try {
-                // Try the debug route for MMRs as fallback
-                console.log('Trying debug MMR endpoint as fallback');
-                const debugResponse = await fetch('/api/debug/mmr');
-                if (debugResponse.ok) {
-                    mmrs = await debugResponse.json();
-                    console.log(`Retrieved ${mmrs.length} MMRs from debug API`);
-                    
-                    if (mmrs.length > 0) {
-                        console.log('Sample MMR data (debug):', mmrs[0]);
-                        const mmrSkus = [...new Set(mmrs.map(mmr => mmr.product_sku))];
-                        console.log('Available MMR product SKUs (debug):', mmrSkus);
+                console.log(`Fetching MMRs for product ${product.sku}`);
+                const mmrResponse = await authenticatedFetch(`/api/mmr/${product.sku}`);
+                
+                if (mmrResponse && mmrResponse.ok) {
+                    const productMmrs = await mmrResponse.json();
+                    if (Array.isArray(productMmrs)) {
+                        mmrs = mmrs.concat(productMmrs);
+                        console.log(`Found ${productMmrs.length} MMRs for product ${product.sku}`);
+                    } else if (productMmrs && productMmrs.items && Array.isArray(productMmrs.items)) {
+                        mmrs = mmrs.concat(productMmrs.items);
+                        console.log(`Found ${productMmrs.items.length} MMRs for product ${product.sku}`);
+                    } else {
+                        console.log(`No MMRs found for product ${product.sku}`);
                     }
                 } else {
-                    console.warn('Failed to fetch MMRs from debug endpoint');
+                    console.warn(`MMR API returned status: ${mmrResponse?.status} for product ${product.sku}`);
+                    
+                    // Try the debug endpoint as fallback for this product
+                    try {
+                        const debugResponse = await fetch(`/api/debug/mmr/${product.sku}`);
+                        if (debugResponse.ok) {
+                            const debugMmrs = await debugResponse.json();
+                            if (Array.isArray(debugMmrs)) {
+                                mmrs = mmrs.concat(debugMmrs);
+                                console.log(`Found ${debugMmrs.length} MMRs for product ${product.sku} via debug endpoint`);
+                            } else if (debugMmrs && debugMmrs.items && Array.isArray(debugMmrs.items)) {
+                                mmrs = mmrs.concat(debugMmrs.items);
+                                console.log(`Found ${debugMmrs.items.length} MMRs for product ${product.sku} via debug endpoint`);
+                            }
+                        }
+                    } catch (debugError) {
+                        console.error(`Debug MMR fetch failed for ${product.sku}:`, debugError);
+                    }
                 }
-            } catch (debugError) {
-                console.error('Debug MMR fetch failed:', debugError);
+            } catch (error) {
+                console.error(`Error fetching MMRs for product ${product.sku}:`, error);
             }
-            
-            // Continue with empty MMRs array - we'll still show products
         }
+        
+        console.log(`Processing ${mmrs.length} total MMRs for all matching products`);
         
         // Display results
         const resultsContainer = document.getElementById('mmrSearchResults');
-        resultsContainer.innerHTML = '';
+        if (!resultsContainer) {
+            console.error('Results container element not found');
+            showError('Cannot display results - element not found');
+            return;
+        }
         
-        // Check the field names in the MMR data to accommodate different API formats
-        const usesProductSku = mmrs.length > 0 && 'productSku' in mmrs[0];
-        const usesProduct_sku = mmrs.length > 0 && 'product_sku' in mmrs[0];
+        resultsContainer.innerHTML = '';
         
         // Create a card for each product with its MMRs
         matchingProducts.forEach(product => {
+            if (!product || !product.sku) {
+                console.warn('Skipping invalid product:', product);
+                return;
+            }
+            
             // Handle different field naming conventions and case sensitivity
             const productMMRs = mmrs.filter(mmr => {
-                if (usesProductSku && mmr.productSku) {
-                    return mmr.productSku.toLowerCase() === product.sku.toLowerCase();
-                } else if (usesProduct_sku && mmr.product_sku) {
-                    return mmr.product_sku.toLowerCase() === product.sku.toLowerCase();
-                }
-                return false;
+                if (!mmr) return false;
+                
+                // Look for the product SKU in any of the common field names
+                const mmrSku = mmr.productSku || mmr.product_sku || mmr.sku;
+                if (!mmrSku) return false;
+                
+                return mmrSku.toLowerCase() === product.sku.toLowerCase();
             });
             
             console.log(`Product ${product.name} (${product.sku}) has ${productMMRs.length} matching MMRs`);
@@ -339,8 +463,8 @@ async function searchProducts(searchTerm) {
                             const version = mmr.version;
                             const baseQuantity = mmr.baseQuantity || mmr.base_quantity || '';
                             const baseUnit = mmr.baseUnit || mmr.base_unit || '';
-                            const productSku = mmr.productSku || mmr.product_sku;
-                            const updatedAt = mmr.updatedAt || mmr.updated_at;
+                            const productSku = mmr.productSku || mmr.product_sku || mmr.sku || product.sku;
+                            const updatedAt = mmr.updatedAt || mmr.updated_at || new Date().toISOString();
                             
                             return `
                                 <tr>
@@ -378,45 +502,90 @@ async function searchProducts(searchTerm) {
     }
 }
 
-// Helper function to select a product for new MMR
+// Function to select a product for new MMR creation
 function selectProductForNewMMR(sku, name) {
-    // Pre-fill product selection in the MMR form
-    const productSelect = $('#productSkuSearch');
+    console.log(`Selecting product for new MMR: ${name} (${sku})`);
     
-    // Check if this option already exists
-    let optionExists = false;
-    productSelect.find('option').each(function() {
-        if ($(this).val() === sku) {
-            optionExists = true;
-            return false;
-        }
-    });
-    
-    // Add the option if it doesn't exist
-    if (!optionExists) {
-        const newOption = new Option(`${name} (${sku})`, sku, true, true);
-        productSelect.append(newOption).trigger('change');
-    } else {
-        productSelect.val(sku).trigger('change');
+    // Scroll to the MMR form
+    const mmrForm = document.getElementById('mmrForm');
+    if (mmrForm) {
+        mmrForm.scrollIntoView({ behavior: 'smooth' });
     }
     
-    // Select the product and scroll to the form
-    selectProduct(sku, name);
-    document.querySelector('.card-header.bg-success').scrollIntoView({ behavior: 'smooth' });
+    // Set the product SKU in the search field and hidden input
+    const productSkuSearch = document.getElementById('productSkuSearch');
+    const productSku = document.getElementById('productSku');
+    const selectedProductInfo = document.getElementById('selectedProductInfo');
+    const selectedProductName = document.getElementById('selectedProductName');
+    const selectedProductSku = document.getElementById('selectedProductSku');
+    
+    if (productSkuSearch && window.$ && $.fn.select2) {
+        // Create the option if it doesn't exist
+        if (!productSkuSearch.querySelector(`option[value="${sku}"]`)) {
+            const option = new Option(`${name} (${sku})`, sku, true, true);
+            $(productSkuSearch).append(option).trigger('change');
+        } else {
+            $(productSkuSearch).val(sku).trigger('change');
+        }
+    }
+    
+    // Set the hidden input value
+    if (productSku) {
+        productSku.value = sku;
+    }
+    
+    // Update the selected product info display
+    if (selectedProductInfo && selectedProductName && selectedProductSku) {
+        selectedProductName.textContent = name;
+        selectedProductSku.textContent = `SKU: ${sku}`;
+        selectedProductInfo.style.display = 'block';
+    }
+    
+    // Pre-populate some default values in the form
+    const baseQuantity = document.getElementById('baseQuantity');
+    if (baseQuantity) {
+        baseQuantity.value = '100'; // Default base quantity
+    }
 }
 
-// Set up product search functionality
+// Set up product search for MMR creation form
 async function setupProductSearch() {
     try {
-        console.log('Setting up product search for MMR creation form');
-        // Get inventory data using the shared helper function
-        let inventory = await fetchInventoryData();
+        console.log('Setting up product search for MMR creation');
         
-        const finishedGoods = inventory.filter(item => 
-            item.type && item.type.toLowerCase().replace(/\s+/g, '') === 'finishedgood'
-        );
-
-        // Initialize Select2 for product search in the MMR creation form
+        // Get all products from inventory (should already be filtered to finished goods)
+        let inventoryResponse = await fetchInventoryData();
+        
+        // Extract items from the response structure
+        let inventory = [];
+        if (inventoryResponse && inventoryResponse.items && Array.isArray(inventoryResponse.items)) {
+            inventory = inventoryResponse.items;
+        } else if (Array.isArray(inventoryResponse)) {
+            inventory = inventoryResponse;
+        } else {
+            console.error('Invalid inventory data format:', inventoryResponse);
+            showError('Could not load inventory data properly for MMR creation.');
+            return;
+        }
+        
+        console.log(`Loaded ${inventory.length} inventory items for product selection`);
+        
+        // Since fetchInventoryData already filters for finished goods, we use all items directly
+        const finishedGoods = inventory;
+        
+        if (finishedGoods.length === 0) {
+            console.warn('No finished goods found for product selection');
+            return;
+        }
+        
+        // Make sure jQuery and Select2 are loaded
+        if (typeof $ === 'undefined' || typeof $.fn.select2 === 'undefined') {
+            console.error('jQuery or Select2 is not loaded');
+            showError('Required libraries not loaded. Please refresh the page.');
+            return;
+        }
+        
+        // Initialize Select2 for product search in the creation form
         $('#productSkuSearch').select2({
             theme: 'bootstrap-5',
             width: '100%',
@@ -427,235 +596,238 @@ async function setupProductSearch() {
                 text: `${product.name} (${product.sku})`,
                 product: product
             })),
-            // Improve the rendering
             templateResult: formatProduct,
             templateSelection: formatProductSelection
-        });
-
-        console.log('MMR form product search Select2 initialized');
-
-        // Handle selection
-        $('#productSkuSearch').on('select2:select', function(e) {
-            console.log('Product selected in MMR form:', e.params.data);
-            const product = e.params.data;
-            selectProduct(product.id, product.product.name);
-        });
-
-        // Handle clearing
-        $('#productSkuSearch').on('select2:clear', function() {
+        }).on('select2:select', function(e) {
+            const selectedSku = e.params.data.id;
+            const selectedProduct = e.params.data.product || finishedGoods.find(p => p.sku === selectedSku);
+            
+            if (selectedProduct) {
+                console.log('Product selected for MMR creation:', selectedProduct);
+                
+                // Set the hidden input
+                document.getElementById('productSku').value = selectedSku;
+                
+                // Show the selected product info
+                const selectedProductInfo = document.getElementById('selectedProductInfo');
+                const selectedProductName = document.getElementById('selectedProductName');
+                const selectedProductSku = document.getElementById('selectedProductSku');
+                
+                if (selectedProductInfo && selectedProductName && selectedProductSku) {
+                    selectedProductName.textContent = selectedProduct.name;
+                    selectedProductSku.textContent = `SKU: ${selectedSku}`;
+                    selectedProductInfo.style.display = 'block';
+                }
+            }
+        }).on('select2:clear', function() {
+            // Hide the selected product info
             const selectedProductInfo = document.getElementById('selectedProductInfo');
             if (selectedProductInfo) {
                 selectedProductInfo.style.display = 'none';
             }
+            
+            // Clear the hidden input
             const productSku = document.getElementById('productSku');
             if (productSku) {
                 productSku.value = '';
             }
         });
-
+        
+        console.log('Product selection for MMR creation initialized');
+        
     } catch (error) {
-        console.error('Error setting up product search:', error);
-        showError('Failed to set up product search: ' + error.message);
-    }
-}
-
-// Helper function to select a product
-function selectProduct(sku, name) {
-    document.getElementById('productSku').value = sku;
-    
-    const selectedProductInfo = document.getElementById('selectedProductInfo');
-    const selectedProductName = document.getElementById('selectedProductName');
-    const selectedProductSku = document.getElementById('selectedProductSku');
-    
-    if (selectedProductInfo && selectedProductName && selectedProductSku) {
-        selectedProductName.textContent = name;
-        selectedProductSku.textContent = `SKU: ${sku}`;
-        selectedProductInfo.style.display = 'block';
+        console.error('Error setting up product search for MMR creation:', error);
+        showError('Failed to set up product selection: ' + error.message);
     }
 }
 
 // Handle MMR form submission
 async function handleMMRSubmit(event) {
     event.preventDefault();
+    console.log('MMR form submitted');
     
     try {
         // Get form data
         const productSku = document.getElementById('productSku').value;
         const baseQuantity = document.getElementById('baseQuantity').value;
+        const createdBy = document.getElementById('createdBy').value;
         
-        if (!productSku || !baseQuantity) {
-            showError('Please fill in all required fields');
+        if (!productSku) {
+            showError('Please select a product');
             return;
         }
         
-        // Get ingredients
-        const ingredients = Array.from(document.querySelectorAll('#ingredientsList .list-group-item')).map(item => {
+        if (!baseQuantity) {
+            showError('Please enter a base quantity');
+            return;
+        }
+        
+        if (!createdBy) {
+            showError('Please enter who is creating this MMR');
+            return;
+        }
+        
+        // Collect ingredients
+        const ingredients = [];
+        document.querySelectorAll('#ingredientsList .list-group-item').forEach(item => {
             const select = item.querySelector('.ingredient-select');
             const quantity = item.querySelector('.ingredient-quantity');
             const unit = item.querySelector('.unit-type');
             
-            if (!select?.value || !quantity?.value || !unit?.value) {
-                throw new Error('Please fill in all ingredient fields');
+            if (select && select.value && quantity && quantity.value && unit && unit.value) {
+                ingredients.push({
+                    sku: select.value,
+                    quantity: parseFloat(quantity.value),
+                    unit: unit.value
+                });
             }
-            
-            return {
-                sku: select.value,
-                quantity: parseFloat(quantity.value),
-                unit: unit.value
-            };
         });
         
-        // Get equipment
-        const equipment = Array.from(document.querySelectorAll('#equipmentList .list-group-item input')).map(input => {
-            if (!input.value) {
-                throw new Error('Please fill in all equipment fields');
+        // Collect equipment
+        const equipment = [];
+        document.querySelectorAll('#equipmentList .list-group-item input').forEach(input => {
+            if (input.value) {
+                equipment.push({
+                    name: input.value
+                });
             }
-            
-            return {
-                name: input.value
-            };
         });
         
-        // Get steps
+        // Collect steps (more complex due to sub-steps)
         const steps = [];
-        const mainSteps = document.querySelectorAll('#stepsList .main-step');
-        
-        mainSteps.forEach(stepElem => {
-            const stepNumber = stepElem.querySelector('.step-number').value;
-            const stepTitle = stepElem.querySelector('.step-title').value;
+        document.querySelectorAll('#stepsList .main-step').forEach(mainStepEl => {
+            const stepNumber = mainStepEl.querySelector('.step-number').value;
+            const title = mainStepEl.querySelector('.step-title').value;
             
-            if (!stepNumber || !stepTitle) {
-                throw new Error('Please fill in all step fields');
+            if (stepNumber && title) {
+                const step = {
+                    number: stepNumber,
+                    title: title,
+                    subSteps: [],
+                    qcSteps: []
+                };
+                
+                // Get sub-steps
+                mainStepEl.querySelectorAll('.sub-step').forEach(subStepEl => {
+                    const subNumber = subStepEl.querySelector('.substep-number').value;
+                    const description = subStepEl.querySelector('.substep-description').value;
+                    
+                    if (subNumber && description) {
+                        step.subSteps.push({
+                            number: subNumber,
+                            description: description
+                        });
+                    }
+                });
+                
+                // Get QC steps
+                mainStepEl.querySelectorAll('.qc-step').forEach(qcStepEl => {
+                    const description = qcStepEl.querySelector('.qc-description').value;
+                    
+                    if (description) {
+                        step.qcSteps.push({
+                            description: description
+                        });
+                    }
+                });
+                
+                steps.push(step);
             }
-            
-            const subSteps = [];
-            stepElem.querySelectorAll('.sub-step').forEach(subStepElem => {
-                const subStepNumber = subStepElem.querySelector('.substep-number').value;
-                const subStepDescription = subStepElem.querySelector('.substep-description').value;
-                
-                if (!subStepNumber || !subStepDescription) {
-                    throw new Error('Please fill in all sub-step fields');
-                }
-                
-                subSteps.push({
-                    number: subStepNumber,
-                    description: subStepDescription
-                });
-            });
-            
-            const qcSteps = [];
-            stepElem.querySelectorAll('.qc-step').forEach(qcStepElem => {
-                const qcDescription = qcStepElem.querySelector('.qc-description').value;
-                
-                if (!qcDescription) {
-                    throw new Error('Please fill in all QC step fields');
-                }
-                
-                qcSteps.push({
-                    description: qcDescription
-                });
-            });
-            
-            steps.push({
-                number: parseInt(stepNumber),
-                title: stepTitle,
-                subSteps: subSteps,
-                qcSteps: qcSteps
-            });
         });
         
-        // Get packaging
-        const packaging = Array.from(document.querySelectorAll('#packagingList .list-group-item')).map(item => {
+        // Collect packaging
+        const packaging = [];
+        document.querySelectorAll('#packagingList .list-group-item').forEach(item => {
             const select = item.querySelector('.packaging-select');
             const quantity = item.querySelector('.packaging-quantity');
             const unit = item.querySelector('.unit-type');
             
-            if (!select?.value || !quantity?.value || !unit?.value) {
-                throw new Error('Please fill in all packaging fields');
+            if (select && select.value && quantity && quantity.value && unit && unit.value) {
+                packaging.push({
+                    sku: select.value,
+                    quantity: parseFloat(quantity.value),
+                    unit: unit.value
+                });
             }
-            
-            return {
-                sku: select.value,
-                quantity: parseFloat(quantity.value),
-                unit: unit.value
-            };
         });
         
-        // Get labels
-        const labels = Array.from(document.querySelectorAll('#labelsList .list-group-item')).map(item => {
+        // Collect labels
+        const labels = [];
+        document.querySelectorAll('#labelsList .list-group-item').forEach(item => {
             const select = item.querySelector('.label-select');
             const quantity = item.querySelector('.label-quantity');
             const unit = item.querySelector('.unit-type');
             
-            if (!select?.value || !quantity?.value || !unit?.value) {
-                throw new Error('Please fill in all label fields');
+            if (select && select.value && quantity && quantity.value && unit && unit.value) {
+                labels.push({
+                    sku: select.value,
+                    quantity: parseFloat(quantity.value),
+                    unit: unit.value
+                });
             }
-            
-            return {
-                sku: select.value,
-                quantity: parseFloat(quantity.value),
-                unit: unit.value
-            };
         });
         
-        const createdBy = document.getElementById('createdBy').value;
-        if (!createdBy) {
-            throw new Error('Please fill in the Created By field');
-        }
-        
-        // Create new MMR object
-        const newMMR = {
+        // Create MMR object
+        const mmr = {
             productSku,
             baseQuantity: parseFloat(baseQuantity),
-            baseUnit: 'units', // Default unit
+            createdBy,
             ingredients,
-            steps,
             equipment,
+            steps,
             packaging,
             labels,
-            createdBy
+            // Add a default version
+            version: '1.0'
         };
         
-        // Send to server using authenticated request
-        const options = {
+        console.log('MMR data:', mmr);
+        
+        // Submit to API
+        const response = await authenticatedFetch('/api/mmr', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(newMMR)
-        };
+            body: JSON.stringify(mmr)
+        });
         
-        const response = await authenticatedFetch('/api/mmr', options);
-        if (!response) return; // Redirected to login
-        
-        const result = await response.json();
-        
-        showSuccess('MMR created successfully!');
-        
-        // Redirect to the detail page
-        window.location.href = `/mmr-detail.html?sku=${result.productSku}&version=${result.version}&mode=view`;
-        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('MMR creation successful:', result);
+            
+            // Show success message
+            alert('MMR created successfully!');
+            
+            // Refresh the search to see the new MMR
+            const productSearchInput = document.getElementById('productSearchInput');
+            if (productSearchInput && $(productSearchInput).val()) {
+                searchProducts($(productSearchInput).val());
+            }
+            
+            // Reset form
+            document.getElementById('mmrForm').reset();
+            document.getElementById('selectedProductInfo').style.display = 'none';
+            document.getElementById('ingredientsList').innerHTML = '';
+            document.getElementById('equipmentList').innerHTML = '';
+            document.getElementById('stepsList').innerHTML = '';
+            document.getElementById('packagingList').innerHTML = '';
+            document.getElementById('labelsList').innerHTML = '';
+            $('#productSkuSearch').val(null).trigger('change');
+        } else {
+            const error = await response.json();
+            throw new Error(error.message || 'Failed to create MMR');
+        }
     } catch (error) {
-        console.error('Error submitting MMR form:', error);
-        showError(error.message || 'Failed to create MMR');
+        console.error('Error creating MMR:', error);
+        showError('Failed to create MMR: ' + error.message);
     }
 }
 
-// Helper function to show errors
+// Show error message
 function showError(message) {
-    const errorBanner = document.createElement('div');
-    errorBanner.className = 'alert alert-danger alert-dismissible fade show';
-    errorBanner.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    const container = document.querySelector('.container') || document.body;
-    container.insertBefore(errorBanner, container.firstChild);
-    
-    setTimeout(() => {
-        errorBanner.remove();
-    }, 5000);
+    console.error(message);
+    alert(message);
 }
 
 // Helper function to show success messages
@@ -677,36 +849,52 @@ function showSuccess(message) {
 
 // Function to add a sub-step to a main step
 function addSubStep(button) {
-    try {
-        const mainStep = button.closest('.main-step');
-        const subStepsContainer = mainStep.querySelector('.sub-steps-container');
-        const template = document.getElementById('subStepTemplate');
-        
-        if (subStepsContainer && template) {
-            const clone = template.content.cloneNode(true);
-            subStepsContainer.appendChild(clone);
-        }
-    } catch (err) {
-        console.error('Error adding sub-step:', err);
-        showError('Failed to add sub-step: ' + err.message);
+    const mainStep = button.closest('.main-step');
+    if (!mainStep) {
+        console.error('Could not find parent main step');
+        return;
     }
+    
+    const subStepsContainer = mainStep.querySelector('.sub-steps-container');
+    if (!subStepsContainer) {
+        console.error('Could not find sub-steps container');
+        return;
+    }
+    
+    // Get the sub-step template
+    const template = document.getElementById('subStepTemplate');
+    if (!template) {
+        console.error('Sub-step template not found');
+        return;
+    }
+    
+    const clone = template.content.cloneNode(true);
+    subStepsContainer.appendChild(clone);
 }
 
 // Function to add a QC step to a main step
 function addQCStep(button) {
-    try {
-        const mainStep = button.closest('.main-step');
-        const subStepsContainer = mainStep.querySelector('.sub-steps-container');
-        const template = document.getElementById('qcStepTemplate');
-        
-        if (subStepsContainer && template) {
-            const clone = template.content.cloneNode(true);
-            subStepsContainer.appendChild(clone);
-        }
-    } catch (err) {
-        console.error('Error adding QC step:', err);
-        showError('Failed to add QC step: ' + err.message);
+    const mainStep = button.closest('.main-step');
+    if (!mainStep) {
+        console.error('Could not find parent main step');
+        return;
     }
+    
+    const subStepsContainer = mainStep.querySelector('.sub-steps-container');
+    if (!subStepsContainer) {
+        console.error('Could not find sub-steps container');
+        return;
+    }
+    
+    // Get the QC step template
+    const template = document.getElementById('qcStepTemplate');
+    if (!template) {
+        console.error('QC step template not found');
+        return;
+    }
+    
+    const clone = template.content.cloneNode(true);
+    subStepsContainer.appendChild(clone);
 }
 
 // Function to load inventory options into select dropdowns
@@ -714,20 +902,70 @@ async function loadInventoryOptions(selectElement, itemTypes) {
     console.log('Loading inventory options for types:', itemTypes);
     
     try {
-        // Fetch inventory data
-        const inventory = await fetchInventoryData();
+        // For ingredient/packaging searches, we need a different endpoint than finished goods
+        // Let's directly use the type-specific endpoint
+        let items = [];
         
-        // Filter by the requested types
-        const filteredItems = inventory.filter(item => {
-            const type = (item.type || '').toLowerCase().replace(/\s+/g, '');
-            return itemTypes.some(t => 
-                type === t.toLowerCase().replace(/\s+/g, '') || 
-                type === t.toLowerCase().replace(/\s+/g, '') + 's' || 
-                type === t.toLowerCase().replace(/\s+/g, '').replace('_', '')
-            );
-        });
+        for (const type of itemTypes) {
+            try {
+                const typeResponse = await authenticatedFetch(`/api/inventory/type/${type}`);
+                if (typeResponse && typeResponse.ok) {
+                    const data = await typeResponse.json();
+                    console.log(`Fetched items of type ${type}:`, data);
+                    
+                    // Extract items from response
+                    let typeItems = [];
+                    if (data && data.items && Array.isArray(data.items)) {
+                        typeItems = data.items;
+                    } else if (Array.isArray(data)) {
+                        typeItems = data;
+                    }
+                    
+                    items = items.concat(typeItems);
+                }
+            } catch (typeError) {
+                console.error(`Error fetching items of type ${type}:`, typeError);
+            }
+        }
         
-        console.log(`Found ${filteredItems.length} items for types:`, itemTypes);
+        // If type-specific endpoints failed, fall back to filtering the main inventory
+        if (items.length === 0) {
+            // Fetch all inventory data
+            const inventoryResponse = await authenticatedFetch('/api/inventory');
+            if (inventoryResponse && inventoryResponse.ok) {
+                const data = await inventoryResponse.json();
+                
+                // Extract and filter items
+                let inventory = [];
+                if (data && data.items && Array.isArray(data.items)) {
+                    inventory = data.items;
+                } else if (Array.isArray(data)) {
+                    inventory = data;
+                }
+                
+                // Filter by the requested types
+                items = inventory.filter(item => {
+                    if (!item || !item.type) return false;
+                    
+                    const type = item.type.toLowerCase().replace(/\s+/g, '');
+                    return itemTypes.some(t => {
+                        if (!t) return false;
+                        
+                        const searchType = t.toLowerCase().replace(/\s+/g, '');
+                        return type === searchType || 
+                               type.includes(searchType) ||
+                               type === searchType + 's' || 
+                               type === searchType.replace('_', '');
+                    });
+                });
+            }
+        }
+        
+        console.log(`Found ${items.length} items for types:`, itemTypes);
+        
+        if (items.length === 0) {
+            console.warn('No items found for the specified types:', itemTypes);
+        }
         
         // Initialize Select2 for this dropdown
         $(selectElement).select2({
@@ -735,7 +973,7 @@ async function loadInventoryOptions(selectElement, itemTypes) {
             width: '100%',
             placeholder: 'Search...',
             allowClear: true,
-            data: filteredItems.map(item => ({
+            data: items.map(item => ({
                 id: item.sku,
                 text: `${item.name} (${item.sku})`,
                 item: item
@@ -754,6 +992,14 @@ async function loadInventoryOptions(selectElement, itemTypes) {
 // Format inventory item for dropdown
 function formatInventoryItem(data) {
     if (!data.id) return data.text;
+    
+    // Handle the case where data.item might be undefined
+    if (!data.item) {
+        return $(`<div>
+            <strong>${data.text}</strong>
+        </div>`);
+    }
+    
     return $(`<div>
         <strong>${data.item.name}</strong>
         <br><small class="text-muted">SKU: ${data.item.sku}</small>
@@ -763,5 +1009,11 @@ function formatInventoryItem(data) {
 // Format inventory item for selection display
 function formatInventoryItemSelection(data) {
     if (!data.id) return data.text;
-    return data.item ? `${data.item.name} (${data.item.sku})` : data.text;
+    
+    // Handle the case where data.item might be undefined
+    if (!data.item) {
+        return data.text;
+    }
+    
+    return `${data.item.name} (${data.item.sku})`;
 }

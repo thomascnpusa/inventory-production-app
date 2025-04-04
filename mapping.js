@@ -154,6 +154,36 @@ async function getAllSkuMappings(platform = null, searchTerm = null, limit = 100
     }
 }
 
+// Count total SKU mappings (for pagination)
+async function countSkuMappings(platform = null, searchTerm = null) {
+    const client = await pgPool.connect();
+    try {
+        let query = 'SELECT COUNT(*) FROM skumapping WHERE 1=1';
+        const params = [];
+        let paramIndex = 1;
+        
+        if (platform) {
+            query += ` AND platform = $${paramIndex}`;
+            params.push(platform);
+            paramIndex++;
+        }
+        
+        if (searchTerm) {
+            query += ` AND (platform_sku ILIKE $${paramIndex} OR internal_sku ILIKE $${paramIndex} OR product_name ILIKE $${paramIndex})`;
+            params.push(`%${searchTerm}%`);
+            paramIndex++;
+        }
+        
+        const result = await client.query(query, params);
+        return parseInt(result.rows[0].count);
+    } catch (error) {
+        console.error('Error counting SKU mappings:', error);
+        return 0;
+    } finally {
+        client.release();
+    }
+}
+
 // Upload SKU mappings from array
 async function bulkUploadSkuMappings(mappings) {
     const client = await pgPool.connect();
@@ -328,35 +358,6 @@ function levenshteinDistance(str1, str2) {
     }
     
     return dp[m][n];
-}
-
-// Count total mappings
-async function countSkuMappings(platform = null, searchTerm = null) {
-    const client = await pgPool.connect();
-    try {
-        let query = 'SELECT COUNT(*) as count FROM skumapping WHERE 1=1';
-        const params = [];
-        let paramIndex = 1;
-        
-        if (platform) {
-            query += ` AND platform = $${paramIndex}`;
-            params.push(platform);
-            paramIndex++;
-        }
-        
-        if (searchTerm) {
-            query += ` AND (platform_sku ILIKE $${paramIndex} OR internal_sku ILIKE $${paramIndex} OR product_name ILIKE $${paramIndex})`;
-            params.push(`%${searchTerm}%`);
-        }
-        
-        const result = await client.query(query, params);
-        return parseInt(result.rows[0].count);
-    } catch (error) {
-        console.error('Error counting SKU mappings:', error);
-        return 0;
-    } finally {
-        client.release();
-    }
 }
 
 // Function to add SKUs to mapping table (helper for Amazon and Shopify integrations)

@@ -18,7 +18,8 @@
         .pagination { margin-top: 20px; justify-content: center; }
         .sub-steps { margin-left: 20px; }
         .table-sm th, .table-sm td { padding: 0.3rem; }
-        .qc-step { background-color: #e6f0ff; }
+        /* Make QC steps blue with stronger specificity */
+        tr.qc-step, .qc-step td { background-color: #e6f0ff !important; }
     </style>
 </head>
 <body>
@@ -31,13 +32,26 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link active" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle active" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item active" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="/admin.html">Admin</a>
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">
@@ -297,207 +311,306 @@
         }
 
         async function loadProductionSteps(orderId) {
-    try {
-        console.log(`Loading production steps for order ${orderId}`);
-        const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/steps`);
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `Failed to load steps: ${response.status}`);
-        }
-        const steps = await response.json();
-        console.log(`Loaded ${steps.length} production steps`, steps);
-
-        const stepsContainer = document.getElementById('stepsContainer');
-        const completedSteps = steps.filter(step => step.completed).length;
-        stepsContainer.innerHTML = `
-            <div class="progress mb-4">
-                <div class="progress-bar" role="progressbar" style="width: ${(completedSteps / steps.length) * 100}%;" 
-                     aria-valuenow="${(completedSteps / steps.length) * 100}" aria-valuemin="0" aria-valuemax="100">
-                    ${completedSteps}/${steps.length} steps completed
-                </div>
-            </div>
-        `;
-
-        // Deduplicate ingredients by SKU
-        steps.forEach(step => {
-            if (step.ingredients) {
-                const uniqueIngredients = [];
-                const seenSKUs = new Set();
-                step.ingredients.forEach(ing => {
-                    if (!seenSKUs.has(ing.sku)) {
-                        seenSKUs.add(ing.sku);
-                        uniqueIngredients.push(ing);
+            try {
+                console.log(`Loading production steps for order ${orderId}`);
+                const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/steps`);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `Failed to load steps: ${response.status}`);
+                }
+                const steps = await response.json();
+                console.log(`Loaded ${steps.length} production steps`, steps);
+                
+                // DEBUG: Log each step to check for substeps
+                steps.forEach(step => {
+                    console.log(`Step ${step.step_number} data:`, {
+                        has_sub_steps: !!step.sub_steps,
+                        sub_steps_length: step.sub_steps ? step.sub_steps.length : 0,
+                        has_subSteps: !!step.subSteps,
+                        subSteps_length: step.subSteps ? step.subSteps.length : 0
+                    });
+                    
+                    if (step.sub_steps && step.sub_steps.length > 0) {
+                        console.log(`Step ${step.step_number} sub_steps:`, step.sub_steps);
+                    } else if (step.subSteps && step.subSteps.length > 0) {
+                        console.log(`Step ${step.step_number} subSteps:`, step.subSteps);
+                    } else {
+                        console.log(`Step ${step.step_number} has no substeps`);
                     }
                 });
-                step.ingredients = uniqueIngredients;
-            }
-        });
 
-        steps.forEach((step, index) => {
-            const stepCard = document.createElement('div');
-            stepCard.className = `card mb-3 step-card ${step.completed ? 'completed' : 'pending'}`;
-            
-            let stepContent = '';
-            if (step.ingredients) {
-                stepContent = `
-                    <h6>Ingredients to Gather</h6>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>SKU</th>
-                                <th>Quantity</th>
-                                <th>Unit</th>
-                                <th>Batch Number</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${step.ingredients.map(ing => `
-                                <tr>
-                                    <td>${ing.name}</td>
-                                    <td>${ing.sku}</td>
-                                    <td>${ing.quantity}</td>
-                                    <td>${ing.unit_type}</td>
-                                    <td>${ing.batch_number || '-'}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
+                const stepsContainer = document.getElementById('stepsContainer');
+                const completedSteps = steps.filter(step => step.completed).length;
+                stepsContainer.innerHTML = `
+                    <div class="progress mb-4">
+                        <div class="progress-bar" role="progressbar" style="width: ${(completedSteps / steps.length) * 100}%;" 
+                             aria-valuenow="${(completedSteps / steps.length) * 100}" aria-valuemin="0" aria-valuemax="100">
+                            ${completedSteps}/${steps.length} steps completed
+                        </div>
+                    </div>
                 `;
-            } else if (step.equipment) {
-                stepContent = `
-                    <h6>Equipment Required</h6>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${step.equipment.map(eq => `
-                                <tr>
-                                    <td>${eq.name}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } else if (step.packaging) {
-                stepContent = `
-                    <h6>Packaging Required</h6>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>SKU</th>
-                                <th>Quantity</th>
-                                <th>Unit</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${step.packaging.map(pkg => `
-                                <tr>
-                                    <td>${pkg.name}</td>
-                                    <td>${pkg.sku}</td>
-                                    <td>${pkg.quantity}</td>
-                                    <td>${pkg.unit_type}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } else if (step.labels) {
-                stepContent = `
-                    <h6>Labels Required</h6>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Name</th>
-                                <th>SKU</th>
-                                <th>Quantity</th>
-                                <th>Unit</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${step.labels.map(lbl => `
-                                <tr>
-                                    <td>${lbl.name}</td>
-                                    <td>${lbl.sku}</td>
-                                    <td>${lbl.quantity}</td>
-                                    <td>${lbl.unit_type}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-            } else {
-                stepContent = `
-                    <p>${step.description}</p>
-                    ${step.subSteps && step.subSteps.length > 0 ? `
-                        <h6>Sub-Steps</h6>
-                        <table class="table table-sm">
-                            <thead>
-                                <tr>
-                                    <th>Step Number</th>
-                                    <th>Description</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${step.subSteps.map(sub => {
-                                    const isQC = sub.step_type && sub.step_type.toLowerCase() === 'qc';
-                                    console.log(`Sub-step ${sub.sub_step_number || 'unnumbered'} type: ${sub.step_type}, isQC: ${isQC}`);
-                                    return `
-                                        <tr style="background-color: ${isQC ? '#e6f0ff' : 'inherit'};">
-                                            <td>${sub.sub_step_number || '-'}</td>
-                                            <td>${sub.description}</td>
+
+                steps.forEach((step, index) => {
+                    const stepCard = document.createElement('div');
+                    stepCard.className = `card mb-3 step-card ${step.completed ? 'completed' : 'pending'}`;
+                    
+                    // Extract step title from the description if it's a special step
+                    // For the first step (typically ingredients), the second step (equipment), and the last two steps (packaging and labeling)
+                    let stepTitle = `Step ${step.step_number}`;
+                    let stepDescription = step.description || '';
+                    let stepContent = '';
+                    
+                    // Check if the step description has ingredients list
+                    if (stepDescription.includes('Gather all required ingredients:')) {
+                        stepTitle = 'Raw Materials';
+                        
+                        // Parse ingredients from the description text
+                        const ingredientsMatch = stepDescription.match(/Gather all required ingredients: (.+)/);
+                        const ingredientsText = ingredientsMatch ? ingredientsMatch[1] : '';
+                        const ingredients = ingredientsText.split(', ').map(ingText => {
+                            const parts = ingText.match(/(.+) \((.+)\): (.+) (.+)/);
+                            if (parts) {
+                                return {
+                                    name: parts[1],
+                                    sku: parts[2],
+                                    quantity: parts[3],
+                                    unit_type: parts[4]
+                                };
+                            }
+                            return { name: ingText, sku: '', quantity: '', unit_type: '' };
+                        });
+                        
+                        stepContent = `
+                            <h6>Raw Materials to Gather</h6>
+                            <table class="table table-sm table-bordered">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Material Name</th>
+                                        <th>SKU</th>
+                                        <th>Quantity</th>
+                                        <th>Unit</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${ingredients.map(ing => `
+                                        <tr>
+                                            <td>${ing.name || '-'}</td>
+                                            <td>${ing.sku || '-'}</td>
+                                            <td>${ing.quantity || '-'}</td>
+                                            <td>${ing.unit_type || '-'}</td>
                                         </tr>
-                                    `;
-                                }).join('')}
-                            </tbody>
-                        </table>
-                    ` : ''}
-                `;
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    } 
+                    // Check if the step description has equipment list
+                    else if (stepDescription.includes('Prepare all required equipment:')) {
+                        stepTitle = 'Equipment';
+                        
+                        // Parse equipment from the description text
+                        const equipmentMatch = stepDescription.match(/Prepare all required equipment: (.+)/);
+                        const equipmentText = equipmentMatch ? equipmentMatch[1] : '';
+                        const equipment = equipmentText.split(', ').map(eq => ({ name: eq }));
+                        
+                        stepContent = `
+                            <h6>Equipment Required</h6>
+                            <table class="table table-sm table-bordered">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Equipment Name</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${equipment.map(eq => `
+                                        <tr>
+                                            <td>${eq.name || '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    }
+                    // Check if the step description has packaging list
+                    else if (stepDescription.includes('Package the finished product:')) {
+                        stepTitle = 'Packaging';
+                        
+                        // Parse packaging from the description text
+                        const packagingMatch = stepDescription.match(/Package the finished product: (.+)/);
+                        const packagingText = packagingMatch ? packagingMatch[1] : '';
+                        const packaging = packagingText.split(', ').map(pkgText => {
+                            const parts = pkgText.match(/(.+) \((.+)\): (.+) (.+)/);
+                            if (parts) {
+                                return {
+                                    name: parts[1],
+                                    sku: parts[2],
+                                    quantity: parts[3],
+                                    unit_type: parts[4]
+                                };
+                            }
+                            return { name: pkgText, sku: '', quantity: '', unit_type: '' };
+                        });
+                        
+                        stepContent = `
+                            <h6>Packaging Materials Required</h6>
+                            <table class="table table-sm table-bordered">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Packaging Name</th>
+                                        <th>SKU</th>
+                                        <th>Quantity</th>
+                                        <th>Unit</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${packaging.map(pkg => `
+                                        <tr>
+                                            <td>${pkg.name || '-'}</td>
+                                            <td>${pkg.sku || '-'}</td>
+                                            <td>${pkg.quantity || '-'}</td>
+                                            <td>${pkg.unit_type || '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    }
+                    // Check if the step description has labels list
+                    else if (stepDescription.includes('Apply labels to packaged product:')) {
+                        stepTitle = 'Labeling';
+                        
+                        // Parse labels from the description text
+                        const labelsMatch = stepDescription.match(/Apply labels to packaged product: (.+)/);
+                        const labelsText = labelsMatch ? labelsMatch[1] : '';
+                        const labels = labelsText.split(', ').map(lblText => {
+                            const parts = lblText.match(/(.+) \((.+)\): (.+) (.+)/);
+                            if (parts) {
+                                return {
+                                    name: parts[1],
+                                    sku: parts[2],
+                                    quantity: parts[3],
+                                    unit_type: parts[4]
+                                };
+                            }
+                            return { name: lblText, sku: '', quantity: '', unit_type: '' };
+                        });
+                        
+                        stepContent = `
+                            <h6>Labels Required</h6>
+                            <table class="table table-sm table-bordered">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Label Name</th>
+                                        <th>SKU</th>
+                                        <th>Quantity</th>
+                                        <th>Unit</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${labels.map(lbl => `
+                                        <tr>
+                                            <td>${lbl.name || '-'}</td>
+                                            <td>${lbl.sku || '-'}</td>
+                                            <td>${lbl.quantity || '-'}</td>
+                                            <td>${lbl.unit_type || '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    }
+                    // Standard process step
+                    else {
+                        stepTitle = `Production Step ${step.step_number}`;
+                        stepContent = `
+                            <p>${stepDescription}</p>
+                        `;
+                        
+                        // Get substeps from either property
+                        let substepsToDisplay = [];
+                        if (step.sub_steps && Array.isArray(step.sub_steps) && step.sub_steps.length > 0) {
+                            substepsToDisplay = step.sub_steps;
+                            console.log(`Using sub_steps for step ${step.step_number}, found ${substepsToDisplay.length} items`);
+                        } else if (step.subSteps && Array.isArray(step.subSteps) && step.subSteps.length > 0) {
+                            substepsToDisplay = step.subSteps;
+                            console.log(`Using subSteps for step ${step.step_number}, found ${substepsToDisplay.length} items`);
+                        } else {
+                            console.log(`No substeps found for step ${step.step_number}`);
+                        }
+                        
+                        if (substepsToDisplay.length > 0) {
+                            console.log(`Step ${step.step_number} substeps to display:`, substepsToDisplay);
+                            
+                            stepContent += `
+                                <h6>Detailed Sub-Steps</h6>
+                                <table class="table table-sm table-bordered">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th width="15%">Step #</th>
+                                            <th width="70%">Description</th>
+                                            <th width="15%">Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${substepsToDisplay.map(sub => {
+                                            const isQC = sub.step_type && sub.step_type.toLowerCase() === 'qc';
+                                            const typeDisplay = isQC ? 'Quality Check' : 'Standard';
+                                            // Always use a light blue background for QC steps
+                                            // Apply both class and inline style for maximum compatibility
+                                            const rowClass = isQC ? 'qc-step' : '';
+                                            return `
+                                                <tr class="${rowClass}">
+                                                    <td>${sub.sub_step_number || '-'}</td>
+                                                    <td>${sub.description || '-'}</td>
+                                                    <td>${typeDisplay}</td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
+                                    </tbody>
+                                </table>
+                            `;
+                        }
+                    }
+
+                    stepCard.innerHTML = `
+                        <div class="card-header ${step.completed ? 'bg-success text-white' : ''}">
+                            <h5 class="mb-0">${stepTitle}</h5>
+                        </div>
+                        <div class="card-body">
+                            ${stepContent}
+                            ${step.completed ? 
+                                `<p class="mt-3">✓ Completed by ${step.completed_by} on ${formatDate(step.completed_at)}</p>` :
+                                `<div class="step-actions mt-3">
+                                    <div class="input-group mb-3">
+                                        <input type="text" class="form-control" placeholder="Your initials" id="initials-${step.id}">
+                                        <button class="btn btn-primary complete-step-btn" data-step-id="${step.id}" data-step-number="${step.step_number}">Complete</button>
+                                    </div>
+                                </div>`}
+                        </div>
+                    `;
+                    stepsContainer.appendChild(stepCard);
+                    console.log(`Rendered step ${step.step_number} with ID ${step.id}, completed: ${step.completed}`);
+                });
+
+                document.querySelectorAll('.complete-step-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const stepId = btn.getAttribute('data-step-id');
+                        console.log(`Button clicked for step ID ${stepId}`);
+                        completeStep(orderId, stepId);
+                    });
+                });
+
+                const yieldForm = document.getElementById('yieldForm');
+                yieldForm.style.display = completedSteps === steps.length ? 'block' : 'none';
+                if (completedSteps === steps.length) {
+                    showAlert('success', 'All steps completed! Please enter the actual yield to finalize the order.');
+                }
+            } catch (error) {
+                console.error('Error loading steps:', error);
+                showAlert('danger', `Failed to load production steps: ${error.message}`);
             }
-
-            stepCard.innerHTML = `
-                <div class="card-header ${step.completed ? 'bg-success text-white' : ''}">
-                    <h5 class="mb-0">Step ${step.step_number}</h5>
-                </div>
-                <div class="card-body">
-                    ${stepContent}
-                    ${step.completed ? 
-                        `<p>Completed by ${step.completed_by} on ${formatDate(step.completed_at)}</p>` :
-                        `<div class="step-actions">
-                            <div class="input-group mb-3">
-                                <input type="text" class="form-control" placeholder="Your initials" id="initials-${step.id}">
-                                <button class="btn btn-primary complete-step-btn" data-step-id="${step.id}" data-step-number="${step.step_number}">Complete</button>
-                            </div>
-                        </div>`}
-                </div>
-            `;
-            stepsContainer.appendChild(stepCard);
-            console.log(`Rendered step ${step.step_number} with ID ${step.id}, completed: ${step.completed}`);
-        });
-
-        document.querySelectorAll('.complete-step-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const stepId = btn.getAttribute('data-step-id');
-                console.log(`Button clicked for step ID ${stepId}`);
-                completeStep(orderId, stepId);
-            });
-        });
-
-        const yieldForm = document.getElementById('yieldForm');
-        yieldForm.style.display = completedSteps === steps.length ? 'block' : 'none';
-        if (completedSteps === steps.length) {
-            showAlert('success', 'All steps completed! Please enter the actual yield to finalize the order.');
         }
-    } catch (error) {
-        console.error('Error loading steps:', error);
-        showAlert('danger', `Failed to load production steps: ${error.message}`);
-    }
-}   
- 
+
         async function completeStep(orderId, stepId) {
             try {
                 console.log(`Attempting to complete step ${stepId} for order ${orderId}`);

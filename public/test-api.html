@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Test</title>
+    <script src="/js/auth.js"></script>
+</head>
+<body>
+    <h1>API Test</h1>
+    <button id="testBtn">Test Inventory API</button>
+    <button id="testWithType">Test With Type=FinishedGood</button>
+    <pre id="results" style="margin-top: 20px; padding: 10px; background-color: #f0f0f0;"></pre>
+
+    <script>
+        // Helper to make authenticated requests
+        async function makeRequest(url) {
+            const results = document.getElementById('results');
+            results.textContent = 'Loading...';
+            
+            try {
+                const response = await authenticatedFetch(url);
+                if (!response) {
+                    results.textContent = 'Authentication error or redirect';
+                    return;
+                }
+                
+                const data = await response.json();
+                results.textContent = JSON.stringify(data, null, 2);
+                
+                // Display key information
+                console.log('Response data:', data);
+                if (data.items && Array.isArray(data.items)) {
+                    console.log(`Found ${data.items.length} items`);
+                    console.log('First item:', data.items[0]);
+                    
+                    // Check for finished goods
+                    const finishedGoods = data.items.filter(item => {
+                        const type = (item.type || '').toLowerCase().replace(/\s+/g, '');
+                        return type === 'finishedgood' || type === 'finishedgoods';
+                    });
+                    console.log(`Found ${finishedGoods.length} finished goods`);
+                    if (finishedGoods.length > 0) {
+                        console.log('First finished good:', finishedGoods[0]);
+                    }
+                }
+            } catch (error) {
+                results.textContent = 'Error: ' + error.message;
+                console.error('API test error:', error);
+            }
+        }
+        
+        document.getElementById('testBtn').addEventListener('click', function() {
+            makeRequest('/api/inventory');
+        });
+        
+        document.getElementById('testWithType').addEventListener('click', function() {
+            makeRequest('/api/inventory/type/FinishedGood');
+        });
+    </script>
+</body>
+</html> 

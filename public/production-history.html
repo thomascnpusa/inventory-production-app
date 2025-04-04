@@ -26,6 +26,66 @@
         .qc-step {
             color: #007bff;
         }
+        
+        /* Styles for test report attachments */
+        .report-files-container {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background-color: #f8f9fa;
+            padding: 8px;
+        }
+        
+        .report-file-item {
+            transition: background-color 0.2s;
+            border-radius: 4px;
+        }
+        
+        .report-file-item:hover {
+            background-color: #e9ecef;
+        }
+        
+        .report-link {
+            text-decoration: none;
+            color: #495057;
+            padding: 5px 8px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .report-link:hover {
+            color: #0d6efd;
+        }
+        
+        .report-filename {
+            max-width: 60%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .report-date {
+            font-size: 0.75rem;
+        }
+
+        /* Delete button styles */
+        .delete-report-btn {
+            padding: 0.125rem 0.375rem;
+            font-size: 0.75rem;
+            margin-right: 2px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        
+        .report-file-item:hover .delete-report-btn {
+            opacity: 1;
+        }
+        
+        .delete-report-btn:hover {
+            background-color: #dc3545;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -38,13 +98,26 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/index.html">Inventory</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/mmr.html">MMR</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/production-process.html">Production</a></li>
-                    <li class="nav-item"><a class="nav-link active" href="/production-history.html">History</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/sku-mapping.html">SKU Mapping</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle active" href="#" id="productionDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Production
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="productionDropdown">
+                            <li><a class="dropdown-item" href="/production-process.html">Production Process</a></li>
+                            <li><a class="dropdown-item" href="/mmr.html">MMR</a></li>
+                            <li><a class="dropdown-item active" href="/production-history.html">History</a></li>
+                        </ul>
+                    </li>
                     <li class="nav-item"><a class="nav-link" href="/forecast.html">Forecast</a></li>
-                    <li class="nav-item admin-only" style="display: none;">
-                        <a class="nav-link" href="/admin.html">Admin</a>
+                    <li class="nav-item dropdown admin-only" style="display: none;">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminDropdown">
+                            <li><a class="dropdown-item" href="/admin.html">Admin Overview</a></li>
+                            <li><a class="dropdown-item" href="/sku-mapping.html">SKU Mapping</a></li>
+                            <li><a class="dropdown-item" href="/amazon-mapping.html">Amazon Mapping</a></li>
+                        </ul>
                     </li>
                 </ul>
                 <div class="ms-auto">
@@ -65,14 +138,19 @@
                         <thead>
                             <tr>
                                 <th>ID</th>
-                                <th>Product SKU</th>
+                                <th>Product</th>
                                 <th>Quantity</th>
                                 <th>Batch Number</th>
                                 <th>Completed Date</th>
                                 <th>Actions</th>
+                                <th>Test Reports</th>
                             </tr>
                         </thead>
-                        <tbody id="historyTableBody"></tbody>
+                        <tbody id="historyTableBody">
+                            <tr>
+                                <td colspan="7" class="text-center">Loading production history...</td>
+                            </tr>
+                        </tbody>
                     </table>
                 </div>
             </div>
@@ -89,6 +167,7 @@
                 </div>
                 <div class="modal-body" id="bprModalBody">
                     <!-- Report content will be injected here -->
+                    <p class="text-center">Loading report data...</p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -99,204 +178,510 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="/js/auth.js"></script>
     <script>
         let currentReport = null;
+        let currentOrderId = null; // Keep track of the currently viewed order ID
 
         document.addEventListener('DOMContentLoaded', async () => {
+            // Check authentication
+            if (!isAuthenticated()) {
+                window.location.href = '/login.html';
+                return;
+            }
+
             // Ensure navbar links visibility is setup correctly
             if (typeof setupPage === 'function') {
                 setupPage();
             }
             
-            await loadHistory();
+            try {
+                await loadHistory();
+            } catch (error) {
+                console.error('Error loading production history:', error);
+                showError('Failed to load production history: ' + error.message);
+            }
         });
 
         async function loadHistory() {
             try {
+                console.log('Fetching completed production orders...');
                 const response = await authenticatedFetch('/api/v1/production-orders/status/Completed');
-                const orders = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                console.log('Received production orders response:', data);
+                
+                let orders = [];
+                if (Array.isArray(data)) {
+                    orders = data;
+                    console.log('Data is an array, using directly');
+                } else if (data.orders && Array.isArray(data.orders)) {
+                    orders = data.orders;
+                    console.log('Data has orders array property, using data.orders');
+                } else {
+                    console.warn('Unexpected data format:', data);
+                    orders = [];
+                }
+                
+                console.log(`Processing ${orders.length} orders`);
+                
+                // Debug: Check if test_reports exists in each order
+                orders.forEach((order, index) => {
+                    console.log(`Order #${order.id} test_reports:`, order.test_reports);
+                });
+                
                 const tbody = document.getElementById('historyTableBody');
                 tbody.innerHTML = '';
 
+                if (orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="text-center">No completed production orders found</td></tr>';
+                    return;
+                }
+
                 orders.forEach(order => {
                     const tr = document.createElement('tr');
+                    const batchNumber = order.finished_batch_number || order.batch_number || 'N/A';
+                    const completionDate = order.completed_at ? new Date(order.completed_at).toLocaleString() : 'N/A';
+                    const orderId = order.id; // Store orderId for easier use
+                    
                     tr.innerHTML = `
-                        <td>${order.id}</td>
-                        <td>${order.product_sku}</td>
+                        <td>${orderId}</td>
+                        <td>${order.product_name ? `${order.product_name} <small class="text-muted">(${order.product_sku})</small>` : order.product_sku}</td>
                         <td>${order.quantity}</td>
-                        <td>${order.finished_batch_number}</td>
-                        <td>${order.completed_at ? new Date(order.completed_at).toLocaleString() : '-'}</td>
+                        <td>${batchNumber}</td>
+                        <td>${completionDate}</td>
                         <td>
-                            <button class="btn btn-sm btn-primary" onclick="viewReport(${order.id})">View BPR</button>
+                            <button class="btn btn-sm btn-primary" onclick="viewReport(${orderId})">View BPR</button>
+                        </td>
+                        <td>
+                            <div class="d-flex flex-column">
+                                <div class="mb-1 d-flex justify-content-between align-items-center">
+                                    <span class="text-secondary fw-bold small">Test Reports</span>
+                                    <span class="badge bg-${order.test_reports && order.test_reports.length > 0 ? 'primary' : 'secondary'} rounded-pill">${order.test_reports ? order.test_reports.length : 0}</span>
+                                </div>
+                                <div id="report-links-${orderId}" class="mb-2 report-link-container">
+                                    ${renderReportLinks(order.test_reports || [])}
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary mt-1" onclick="attachReport(${orderId})">
+                                    <i class="bi bi-plus-circle me-1"></i>Attach Report
+                                </button>
+                                <input type="file" id="report-upload-${orderId}" style="display: none;" accept=".pdf" onchange="handleFileUpload(${orderId})">
+                            </div>
                         </td>
                     `;
                     tbody.appendChild(tr);
                 });
             } catch (error) {
-                showError('Failed to load production history');
-                console.error(error);
+                console.error('Error loading production history:', error);
+                showError('Failed to load production history: ' + error.message);
             }
         }
 
         async function viewReport(orderId) {
             try {
+                console.log(`Fetching report for order ID: ${orderId}`);
+                // Show the modal with loading indicator
+                const modal = new bootstrap.Modal(document.getElementById('bprModal'));
+                document.getElementById('bprModalBody').innerHTML = '<p class="text-center">Loading report data...</p>';
+                modal.show();
+                
                 const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/report`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const report = await response.json();
                 console.log('Report data:', report); // Debug log
-                currentReport = report;
+                currentReport = report; // Keep report data for display
+                currentOrderId = orderId; // Store the order ID for the download button
                 displayBPR(report);
             } catch (error) {
-                showError('Failed to load batch production record');
-                console.error(error);
+                console.error('Failed to load batch production record:', error);
+                document.getElementById('bprModalBody').innerHTML = `
+                    <div class="alert alert-danger">
+                        Failed to load production record. ${error.message}
+                    </div>
+                `;
             }
         }
 
         function displayBPR(report) {
             const modalBody = document.getElementById('bprModalBody');
+            
+            if (!report || !report.order_details) {
+                modalBody.innerHTML = '<div class="alert alert-warning">Invalid report data format</div>';
+                return;
+            }
+            
+            const orderDetails = report.order_details || {};
+            const batches = report.batches_used || [];
+            const productionDetails = report.production_details || { steps: [] };
+            const yieldData = report.yield_data || {};
+            
             modalBody.innerHTML = `
                 <div class="report-section">
                     <h6>Identification Information</h6>
-                    <p><strong>Order ID:</strong> ${report.order_details.id}</p>
-                    <p><strong>Product Name:</strong> ${report.order_details.product_name}</p>
-                    <p><strong>Product SKU:</strong> ${report.order_details.product_sku}</p>
-                    <p><strong>Batch Number:</strong> ${report.order_details.batch_number}</p>
-                    <p><strong>Production Date:</strong> ${report.order_details.production_date ? new Date(report.order_details.production_date).toLocaleString() : 'N/A'}</p>
-                    <p><strong>Completion Date:</strong> ${report.order_details.completion_date ? new Date(report.order_details.completion_date).toLocaleString() : 'N/A'}</p>
+                    <p><strong>Order ID:</strong> ${orderDetails.id || 'N/A'}</p>
+                    <p><strong>Product Name:</strong> ${orderDetails.product_name || 'N/A'}</p>
+                    <p><strong>Product SKU:</strong> ${orderDetails.product_sku || 'N/A'}</p>
+                    <p><strong>Batch Number:</strong> ${orderDetails.batch_number || 'N/A'}</p>
+                    <p><strong>Production Date:</strong> ${orderDetails.production_date ? new Date(orderDetails.production_date).toLocaleString() : 'N/A'}</p>
+                    <p><strong>Completion Date:</strong> ${orderDetails.completion_date ? new Date(orderDetails.completion_date).toLocaleString() : 'N/A'}</p>
                 </div>
 
                 <div class="report-section">
                     <h6>Raw Materials Used</h6>
-                    <ul>
-                        ${report.batches_used.filter(b => b.item_type === 'raw_ingredient').map((batch, i) => `
-                            <li>${i + 1}. ${batch.name} (${batch.sku}) - ${batch.quantity_used} ${batch.unit_type}<br>
-                                Batch: ${batch.batch_number}, Supplier: ${batch.supplier_name}
-                            </li>
-                        `).join('')}
-                    </ul>
+                    ${batches.filter(b => b.item_type === 'raw_ingredient').length > 0 ? 
+                        `<ul>
+                            ${batches.filter(b => b.item_type === 'raw_ingredient').map((batch, i) => `
+                                <li>${i + 1}. ${batch.name} (${batch.sku}) - ${batch.quantity_used} ${batch.unit_type}<br>
+                                    Batch: ${batch.batch_number}, Supplier: ${batch.supplier_name}
+                                </li>
+                            `).join('')}
+                        </ul>` : 
+                        '<p>No raw materials recorded</p>'
+                    }
                 </div>
 
                 <div class="report-section">
                     <h6>Production Details</h6>
-                    <p><strong>Quantity Produced:</strong> ${report.production_details.quantity_produced} units</p>
-                    <p><strong>Equipment Used:</strong> ${report.production_details.equipment_used.join(', ')}</p>
-                    <h6>Steps:</h6>
-                    <ul>
-                        ${report.production_details.steps.map(step => `
-                            <li>Step ${step.step_number}: ${step.description}<br>
-                                Completed by: ${step.completed_by} at ${new Date(step.completed_at).toLocaleString()}
-                                ${step.sub_steps && step.sub_steps.length > 0 ? `
-                                    <h6>Sub-Steps:</h6>
-                                    <ul>
-                                        ${step.sub_steps.map(sub => `
-                                            <li class="${sub.step_type === 'qc' ? 'qc-step' : ''}">
-                                                ${sub.sub_step_number}: ${sub.description}<br>
-                                                ${sub.step_type === 'qc' ? `Status: ${sub.completed ? 'Pass' : 'Pending'}` : ''}
-                                            </li>
-                                        `).join('')}
-                                    </ul>
-                                ` : ''}
-                            </li>
-                        `).join('')}
-                    </ul>
+                    <p><strong>Quantity Produced:</strong> ${productionDetails.quantity_produced || 'N/A'} units</p>
+                    <p><strong>Equipment Used:</strong> ${(productionDetails.equipment_used || []).join(', ') || 'N/A'}</p>
+                    
+                    ${productionDetails.steps && productionDetails.steps.length > 0 ? 
+                        `<h6>Steps:</h6>
+                        <ul>
+                            ${productionDetails.steps.map(step => `
+                                <li>Step ${step.step_number}: ${step.description}<br>
+                                    Completed by: ${step.completed_by || 'N/A'} at ${step.completed_at ? new Date(step.completed_at).toLocaleString() : 'N/A'}
+                                    ${step.sub_steps && step.sub_steps.length > 0 ? `
+                                        <h6>Sub-Steps:</h6>
+                                        <ul>
+                                            ${step.sub_steps.map(sub => `
+                                                <li class="${sub.step_type === 'qc' ? 'qc-step' : ''}">
+                                                    ${sub.sub_step_number || ''}: ${sub.description || 'N/A'}<br>
+                                                    ${sub.step_type === 'qc' ? `Status: ${sub.completed ? 'Pass' : 'Pending'}` : ''}
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    ` : ''}
+                                </li>
+                            `).join('')}
+                        </ul>` : 
+                        '<p>No steps recorded</p>'
+                    }
                 </div>
 
                 <div class="report-section">
                     <h6>Yield Data</h6>
-                    <p><strong>Total Good Units:</strong> ${report.yield_data.total_good_units}</p>
-                    <p><strong>Rejected Units:</strong> ${report.yield_data.rejected_units}</p>
-                    <p><strong>Yield Percentage:</strong> ${report.yield_data.yield_percentage}%</p>
+                    <p><strong>Total Good Units:</strong> ${yieldData.total_good_units || 'N/A'}</p>
+                    <p><strong>Rejected Units:</strong> ${yieldData.rejected_units || '0'}</p>
+                    <p><strong>Yield Percentage:</strong> ${yieldData.yield_percentage || 'N/A'}%</p>
                 </div>
             `;
-
-            const modal = new bootstrap.Modal(document.getElementById('bprModal'));
-            modal.show();
-
-            document.getElementById('downloadBprBtn').onclick = () => generateBPR(report);
         }
 
-        function generateBPR(report) {
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF();
-            const pageWidth = doc.internal.pageSize.getWidth();
-            const pageHeight = doc.internal.pageSize.getHeight();
-            const margin = 15;
-            const maxWidth = pageWidth - 2 * margin;
-            let y = margin;
+        // Show error message
+        function showError(message) {
+            const alertsContainer = document.getElementById('alerts-container');
+            if (!alertsContainer) return;
+            
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger alert-dismissible fade show';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            
+            alertsContainer.appendChild(alertDiv);
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                alertDiv.classList.remove('show');
+                setTimeout(() => alertDiv.remove(), 500);
+            }, 5000);
+        }
 
-            // Helper function to add text with wrapping and page breaks
-            function addText(text, x, y, options = {}) {
-                const fontSize = options.fontSize || doc.getFontSize();
-                doc.setFontSize(fontSize);
-                
-                if (options.bold) {
-                    doc.setFont("helvetica", "bold");
-                } else {
-                    doc.setFont("helvetica", "normal");
-                }
-                
-                const lines = doc.splitTextToSize(text, maxWidth);
-                
-                if (options.align === 'center') {
-                    x = pageWidth / 2;
-                }
-                
-                lines.forEach(line => {
-                    if (y > pageHeight - margin) {
-                        doc.addPage();
-                        y = margin;
+        // Set up the download button event handler to use the new backend endpoint with authenticatedFetch
+        document.getElementById('downloadBprBtn').addEventListener('click', async function() { // Make the handler async
+            if (currentOrderId) {
+                console.log(`Requesting combined PDF download for order ID: ${currentOrderId}`);
+                try {
+                    const response = await authenticatedFetch(`/api/v1/production-orders/${currentOrderId}/download-combined-report`, {
+                        method: 'GET'
+                        // No body or Content-Type needed for GET
+                    });
+
+                    if (!response.ok) {
+                        // Try to get error message from body if possible
+                        const errorData = await response.json().catch(() => ({ message: 'Download failed with status: ' + response.status }));
+                        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
                     }
-                    doc.text(line, x, y, options);
-                    y += fontSize * 0.4;
+
+                    // Get the filename from the Content-Disposition header, default if not found
+                    const disposition = response.headers.get('content-disposition');
+                    let filename = `Combined-BPR-Order-${currentOrderId}.pdf`; // Default filename
+                    if (disposition && disposition.includes('filename=')) {
+                        const filenameMatch = disposition.match(/filename="?(.+?)"?$/);
+                        if (filenameMatch && filenameMatch.length === 2)
+                            filename = filenameMatch[1];
+                    }
+
+                    // Get the response as a blob
+                    const blob = await response.blob();
+
+                    // Create a temporary URL for the blob
+                    const url = window.URL.createObjectURL(blob);
+
+                    // Create a temporary anchor element to trigger the download
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = filename; // Use the extracted or default filename
+                    document.body.appendChild(a);
+                    a.click();
+
+                    // Clean up by revoking the object URL and removing the anchor
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+
+                } catch (error) {
+                    console.error('Error downloading combined PDF:', error);
+                    showError(`Download failed: ${error.message}`);
+                }
+            } else {
+                showError('No report data available to determine download link');
+            }
+        });
+
+        // Placeholder function for attaching reports
+        function attachReport(orderId) {
+            console.log(`Attach report clicked for order ID: ${orderId}`);
+            // Trigger the hidden file input
+            document.getElementById(`report-upload-${orderId}`).click();
+        }
+
+        // Placeholder function to handle the actual file upload (to be implemented)
+        async function handleFileUpload(orderId) {
+            const fileInput = document.getElementById(`report-upload-${orderId}`);
+            const file = fileInput.files[0];
+            if (!file) {
+                console.log('No file selected.');
+                return;
+            }
+            if (file.type !== 'application/pdf') {
+                showError('Please select a PDF file.');
+                return;
+            }
+
+            console.log(`Uploading file: ${file.name} for order ID: ${orderId}`);
+            // TODO: Implement the actual file upload logic here
+            // - Create FormData
+            // - Use authenticatedFetch to POST to a new backend endpoint
+            // - Update the UI (e.g., add link in #report-links-<orderId>) on success
+            //showError('File upload functionality not yet implemented.'); // Placeholder message - Removed
+
+            const formData = new FormData();
+            formData.append('reportFile', file); // Key must match backend ('reportFile')
+
+            try {
+                // Use authenticatedFetch for the upload
+                // We need to pass the FormData directly and let the browser set Content-Type
+                const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/report`, {
+                    method: 'POST',
+                    body: formData,
+                    // IMPORTANT: Do NOT set Content-Type header for FormData, browser handles it
+                    headers: {
+                       // 'Content-Type': 'multipart/form-data' // Not needed, browser sets it with boundary
+                    }
+                }, true); // Pass true to skip default JSON content type
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ message: 'Upload failed with status: ' + response.status }));
+                    throw new Error(errorData.message || 'Failed to upload report.');
+                }
+
+                const result = await response.json();
+                console.log('Upload successful:', result);
+                showSuccess('Report uploaded successfully!');
+
+                // Refresh the list of reports for this order
+                await fetchAndDisplayReports(orderId);
+
+            } catch (error) {
+                console.error('Error uploading report:', error);
+                showError(`Upload failed: ${error.message}`);
+            } finally {
+                // Clear the file input value so the same file can be selected again if needed
+                fileInput.value = '';
+            }
+        }
+
+        // Helper function to fetch and display reports for a specific order
+        async function fetchAndDisplayReports(orderId) {
+            try {
+                const response = await authenticatedFetch(`/api/v1/production-orders/${orderId}/reports`);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch reports: ${response.status}`);
+                }
+                const reports = await response.json();
+                updateReportLinks(orderId, reports);
+            } catch (error) {
+                console.error('Error fetching reports:', error);
+                // Optionally show a less intrusive error, as this might be called during refresh
+                // showError(`Could not refresh reports: ${error.message}`);
+            }
+        }
+
+        // Helper function to update the DOM with report links
+        function updateReportLinks(orderId, reports) {
+            const linksContainer = document.getElementById(`report-links-${orderId}`);
+            if (!linksContainer) return;
+            
+            // Use the same rendering function we use during initial display
+            linksContainer.innerHTML = renderReportLinks(reports);
+        }
+
+        // Show success message
+        function showSuccess(message) {
+            const alertsContainer = document.getElementById('alerts-container');
+            if (!alertsContainer) return;
+            
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-success alert-dismissible fade show';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            
+            alertsContainer.appendChild(alertDiv);
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                alertDiv.classList.remove('show');
+                setTimeout(() => alertDiv.remove(), 500);
+            }, 5000);
+        }
+
+        // Helper function to render report links as HTML
+        function renderReportLinks(reports) {
+            if (!reports || reports.length === 0) {
+                return '<small class="text-muted">No reports attached.</small>';
+            }
+            
+            // Group reports by file type (based on extension or naming pattern)
+            const fileTypeIcons = {
+                'default': 'bi-file-earmark-pdf',
+                'bpr': 'bi-file-earmark-text',
+                'production': 'bi-file-earmark-spreadsheet',
+                'traveler': 'bi-file-earmark-ruled'
+            };
+            
+            return `
+                <div class="report-files-container">
+                    ${reports.map(report => {
+                        // Determine file type and icon
+                        let iconClass = fileTypeIcons.default;
+                        const filename = report.original_filename.toLowerCase();
+                        
+                        if (filename.includes('bpr')) {
+                            iconClass = fileTypeIcons.bpr;
+                        } else if (filename.includes('production')) {
+                            iconClass = fileTypeIcons.production;
+                        } else if (filename.includes('traveler')) {
+                            iconClass = fileTypeIcons.traveler;
+                        }
+                        
+                        // Format the date
+                        const uploadDate = new Date(report.uploaded_at).toLocaleDateString();
+                        
+                        return `
+                            <div class="report-file-item mb-1">
+                                <div class="d-flex align-items-center w-100">
+                                    <a href="javascript:void(0)" 
+                                       class="report-link d-flex align-items-center flex-grow-1"
+                                       onclick="downloadReport('${report.filename}', '${report.original_filename}')">
+                                        <i class="bi ${iconClass} me-2 text-primary"></i>
+                                        <span class="report-filename text-truncate">${report.original_filename}</span>
+                                        <small class="text-muted ms-auto report-date me-2">${uploadDate}</small>
+                                    </a>
+                                    <button class="btn btn-sm btn-outline-danger delete-report-btn" 
+                                           onclick="confirmDeleteReport(event, ${report.id}, '${report.original_filename}')"
+                                           type="button">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+        
+        // Function to download a report with authentication
+        async function downloadReport(filename, originalFilename) {
+            try {
+                console.log(`Downloading report: ${originalFilename}`);
+                const response = await authenticatedFetch(`/api/v1/production-orders/reports/${filename}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to download report: ${response.status}`);
+                }
+                
+                // Convert the response to a blob
+                const blob = await response.blob();
+                
+                // Create a download link
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = originalFilename;
+                document.body.appendChild(a);
+                a.click();
+                
+                // Clean up
+                setTimeout(() => {
+                    URL.revokeObjectURL(url);
+                    a.remove();
+                }, 100);
+            } catch (error) {
+                console.error('Error downloading report:', error);
+                showError(`Failed to download report: ${error.message}`);
+            }
+        }
+        
+        // Function to confirm deletion of a report
+        function confirmDeleteReport(event, reportId, filename) {
+            event.stopPropagation(); // Prevent clicking on parent elements
+            
+            if (confirm(`Are you sure you want to delete the report "${filename}"?`)) {
+                deleteReport(reportId);
+            }
+        }
+        
+        // Function to delete a report
+        async function deleteReport(reportId) {
+            try {
+                const response = await authenticatedFetch(`/api/v1/production-orders/report/${reportId}`, {
+                    method: 'DELETE'
                 });
                 
-                return y + (options.addSpace ? 3 : 1);
-            }
-
-            // Helper function to add a divider
-            function addDivider(yPos) {
-                doc.setDrawColor(200, 200, 200);
-                doc.setLineWidth(0.5);
-                doc.line(margin, yPos, pageWidth - margin, yPos);
-                return yPos + 3;
-            }
-
-            // Title and header
-            y = margin;
-            y = addText('Batch Production Record', pageWidth / 2, y, { align: 'center', fontSize: 14, bold: true });
-            y = addDivider(y);
-
-            // Identification Info - 2 column layout
-            const colWidth = (maxWidth - 5) / 2;
-            y = addText('Identification Information', margin, y, { fontSize: 11, bold: true });
-            
-            const leftCol = margin;
-            const rightCol = margin + colWidth + 5;
-            let leftY = y;
-            let rightY = y;
-            
-            leftY = addText(`Order ID: ${report.order_details.id}`, leftCol, leftY, { fontSize: 9 });
-            leftY = addText(`Product Name: ${report.order_details.product_name}`, leftCol, leftY, { fontSize: 9 });
-            leftY = addText(`Product SKU: ${report.order_details.product_sku}`, leftCol, leftY, { fontSize: 9 });
-            
-            rightY = addText(`Batch Number: ${report.order_details.batch_number}`, rightCol, rightY, { fontSize: 9 });
-            rightY = addText(`Production Date: ${report.order_details.production_date ? new Date(report.order_details.production_date).toLocaleDateString() : 'N/A'}`, rightCol, rightY, { fontSize: 9 });
-            rightY = addText(`Completion Date: ${report.order_details.completion_date ? new Date(report.order_details.completion_date).toLocaleDateString() : 'N/A'}`, rightCol, rightY, { fontSize: 9 });
-            
-            y = Math.max(leftY, rightY);
-            y = addDivider(y);
-
-            // Raw Materials Used
-            y = addText('Raw Materials Used', margin, y, { fontSize: 11, bold: true });
-            const ingredients = report.batches_used.filter(b => b.item_type === 'raw_ingredient');
-            if (ingredients.length === 0) {
-                y = addText('No raw materials recorded', margin + 2, y, { fontSize: 9 });
-            } else {
-                ingredients.forEach((batch, i) => {
-                    y = addText(`${i + 1}. ${batch.name} (${batch.sku}) - ${batch.quantity_used} ${batch.unit_type}`, margin + 2, y, { fontSize: 9 });
-                    y = addText(`   Batch: ${batch.batch_number}, Supplier: ${batch.supplier_name}`, margin + 5, y, { fontSize: 9, addSpace: true });
-                });
+                if (!response.ok) {
+                    throw new Error(`Failed to delete report: ${response.status}`);
+                }
+                
+                showSuccess('Report deleted successfully');
+                
+                // Refresh the list of reports for all orders
+                await loadHistory();
+            } catch (error) {
+                console.error('Error deleting report:', error);
+                showError(`Failed to delete report: ${error.message}`);
             }
         }
     </script>

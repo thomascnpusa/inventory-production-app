@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Types Test</title>
+    <script src="/js/auth.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #2d864f;
+        }
+        button {
+            background-color: #2d864f;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #256d41;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .types-list {
+            margin-top: 20px;
+        }
+        .type-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Inventory Types Test</h1>
+    
+    <div>
+        <button id="checkTypes">Check Inventory Types</button>
+        <button id="testFinishedGoods">Test FinishedGood Items</button>
+        <button id="testRawIngredients">Test RawIngredient Items</button>
+    </div>
+    
+    <h2>Results:</h2>
+    <pre id="results">Results will appear here...</pre>
+    
+    <div class="types-list" id="typesList"></div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', async function() {
+            async function makeAuthRequest(url) {
+                try {
+                    const response = await authenticatedFetch(url);
+                    if (!response || !response.ok) {
+                        return { error: response ? `HTTP error: ${response.status}` : 'Authentication error' };
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error('Request error:', error);
+                    return { error: error.message };
+                }
+            }
+            
+            // Check all inventory types
+            document.getElementById('checkTypes').addEventListener('click', async function() {
+                const results = document.getElementById('results');
+                const typesList = document.getElementById('typesList');
+                
+                results.textContent = 'Fetching inventory types...';
+                typesList.innerHTML = '';
+                
+                try {
+                    const data = await makeAuthRequest('/api/debug/inventory-types');
+                    
+                    if (data.error) {
+                        results.textContent = `Error: ${data.error}`;
+                        return;
+                    }
+                    
+                    results.textContent = JSON.stringify(data, null, 2);
+                    
+                    // Display types in a nicer format
+                    if (Array.isArray(data) && data.length > 0) {
+                        data.forEach(typeData => {
+                            const typeItem = document.createElement('div');
+                            typeItem.className = 'type-item';
+                            typeItem.innerHTML = `
+                                <strong>Type:</strong> "${typeData.type}" 
+                                <strong>Count:</strong> ${typeData.count}
+                                <button class="test-type-btn" data-type="${typeData.type}">Test This Type</button>
+                            `;
+                            typesList.appendChild(typeItem);
+                        });
+                        
+                        // Add event listeners to the test buttons
+                        document.querySelectorAll('.test-type-btn').forEach(btn => {
+                            btn.addEventListener('click', async function() {
+                                const type = this.getAttribute('data-type');
+                                results.textContent = `Fetching items with type "${type}"...`;
+                                
+                                const typeItems = await makeAuthRequest(`/api/inventory/type/${type}`);
+                                results.textContent = JSON.stringify(typeItems, null, 2);
+                            });
+                        });
+                    }
+                } catch (error) {
+                    results.textContent = `Error: ${error.message}`;
+                    console.error('Error checking types:', error);
+                }
+            });
+            
+            // Test FinishedGood items
+            document.getElementById('testFinishedGoods').addEventListener('click', async function() {
+                const results = document.getElementById('results');
+                results.textContent = 'Fetching finished goods...';
+                
+                try {
+                    const data = await makeAuthRequest('/api/inventory/type/FinishedGood');
+                    results.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    results.textContent = `Error: ${error.message}`;
+                    console.error('Error fetching finished goods:', error);
+                }
+            });
+            
+            // Test RawIngredient items
+            document.getElementById('testRawIngredients').addEventListener('click', async function() {
+                const results = document.getElementById('results');
+                results.textContent = 'Fetching raw ingredients...';
+                
+                try {
+                    const data = await makeAuthRequest('/api/inventory/type/RawIngredient');
+                    results.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    results.textContent = `Error: ${error.message}`;
+                    console.error('Error fetching raw ingredients:', error);
+                }
+            });
+        });
+    </script>
+</body>
+</html> 

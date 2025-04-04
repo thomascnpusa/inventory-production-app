@@ -65,10 +65,13 @@ async function loadMMRDetails() {
         
         let mmrDetails = null;
         
+        // Ensure mmrVersion is passed as a string
+        const versionParam = mmrVersion.toString();
+        
         // Try authenticated API endpoint first
         try {
-            console.log(`Fetching MMR data for ${productSku} version ${mmrVersion}`);
-            const response = await authenticatedFetch(`/api/mmr/${productSku}/${mmrVersion}`);
+            console.log(`Fetching MMR data for ${productSku} version ${versionParam}`);
+            const response = await authenticatedFetch(`/api/mmr/${encodeURIComponent(productSku)}/${encodeURIComponent(versionParam)}`);
             
             if (response && response.ok) {
                 mmrDetails = await response.json();
@@ -83,7 +86,7 @@ async function loadMMRDetails() {
             // Try debug endpoint as fallback
             try {
                 console.log('Trying debug MMR endpoint as fallback');
-                const debugResponse = await fetch(`/api/debug/mmr/${productSku}/${mmrVersion}`);
+                const debugResponse = await fetch(`/api/debug/mmr/${encodeURIComponent(productSku)}/${encodeURIComponent(versionParam)}`);
                 
                 if (debugResponse.ok) {
                     mmrDetails = await debugResponse.json();
@@ -93,6 +96,26 @@ async function loadMMRDetails() {
                 }
             } catch (debugError) {
                 console.error('Debug MMR fetch also failed:', debugError);
+                
+                // Display known information to help with debugging
+                console.log(`Debug info: Tried to fetch MMR for SKU=${productSku}, Version=${versionParam}`);
+                
+                try {
+                    // Try to check if the MMR product exists at all
+                    const mmrList = await fetch(`/api/debug/mmr/${encodeURIComponent(productSku)}`);
+                    if (mmrList.ok) {
+                        const mmrs = await mmrList.json();
+                        if (Array.isArray(mmrs) && mmrs.length > 0) {
+                            console.log(`Product ${productSku} has MMRs, but version ${versionParam} was not found.`);
+                            console.log('Available versions:', mmrs.map(m => m.version));
+                        } else {
+                            console.log(`No MMRs found for product ${productSku}`);
+                        }
+                    }
+                } catch (listError) {
+                    console.log('Could not get list of MMRs for product:', listError);
+                }
+                
                 throw new Error('Failed to fetch MMR data from both regular and debug endpoints');
             }
         }
@@ -105,7 +128,7 @@ async function loadMMRDetails() {
         // Get product details to show name
         let productDetails = null;
         try {
-            const inventoryResponse = await authenticatedFetch(`/api/inventory/${productSku}`);
+            const inventoryResponse = await authenticatedFetch(`/api/inventory/${encodeURIComponent(productSku)}`);
             if (inventoryResponse && inventoryResponse.ok) {
                 productDetails = await inventoryResponse.json();
                 console.log('Successfully fetched product details:', productDetails);
@@ -128,6 +151,9 @@ async function loadMMRDetails() {
 
 // Display MMR details in the UI
 function displayMMRDetails(mmrData, productData) {
+    // Store the MMR data globally for use in sub-functions
+    window.mmrData = mmrData;
+    
     // Convert camelCase to snake_case property access (API has inconsistent naming)
     const getData = (obj, prop) => {
         return obj[prop] || obj[convertToSnakeCase(prop)] || obj[convertToCamelCase(prop)];
@@ -159,6 +185,16 @@ function displayMMRDetails(mmrData, productData) {
     } else {
         document.getElementById('productName').textContent = getData(mmrData, 'productSku');
     }
+    
+    // Log the structure of the MMR data to help with debugging
+    console.log('MMR data structure for display:', {
+        ingredients: mmrData.ingredients ? mmrData.ingredients.length : 0,
+        steps: mmrData.steps ? mmrData.steps.length : 0,
+        subSteps: mmrData.subSteps ? mmrData.subSteps.length : 0,
+        equipment: mmrData.equipment ? mmrData.equipment.length : 0,
+        packaging: mmrData.packaging ? mmrData.packaging.length : 0,
+        labels: mmrData.labels ? mmrData.labels.length : 0
+    });
     
     // Handle ingredients
     const ingredients = getData(mmrData, 'ingredients') || [];
@@ -292,17 +328,61 @@ function displaySteps(steps) {
             </div>
         `;
         
-        const subSteps = step.subSteps || step.sub_steps || [];
-        if (subSteps.length > 0) {
-            const sortedSubSteps = [...subSteps].sort((a, b) => {
-                const subNumA = a.sub_step_number || a.subStepNumber || '';
-                const subNumB = b.sub_step_number || b.subStepNumber || '';
-                return subNumA.localeCompare(subNumB, undefined, { numeric: true });
+        stepsContainer.appendChild(stepElem);
+    });
+    
+    // Get sub-steps from the parent mmrData object
+    // The API returns subSteps as a separate array, not nested within steps
+    const subSteps = window.mmrData?.subSteps || [];
+    
+    if (subSteps && Array.isArray(subSteps) && subSteps.length > 0) {
+        console.log(`Processing ${subSteps.length} sub-steps`);
+        
+        // Group sub-steps by their main step number
+        const subStepsByMainStep = {};
+        
+        subSteps.forEach(subStep => {
+            const mainStepNumber = subStep.main_step_number || subStep.mainStepNumber;
+            if (!mainStepNumber) return;
+            
+            if (!subStepsByMainStep[mainStepNumber]) {
+                subStepsByMainStep[mainStepNumber] = [];
+            }
+            
+            subStepsByMainStep[mainStepNumber].push(subStep);
+        });
+        
+        // Add sub-steps to their corresponding main steps
+        Object.keys(subStepsByMainStep).forEach(mainStepNumber => {
+            // Find the main step element
+            const mainSteps = document.querySelectorAll('.main-step');
+            let mainStepElement = null;
+            
+            for (const elem of mainSteps) {
+                const stepNumberElement = elem.querySelector('.step-number');
+                if (stepNumberElement && stepNumberElement.textContent.trim() === mainStepNumber.toString()) {
+                    mainStepElement = elem;
+                    break;
+                }
+            }
+            
+            if (!mainStepElement) {
+                console.warn(`Could not find main step element for step number ${mainStepNumber}`);
+                return;
+            }
+            
+            // Create sub-steps container
+            const subStepsContainer = document.createElement('div');
+            subStepsContainer.className = 'sub-steps-container mt-3 ms-4 ps-3 border-start border-success';
+            
+            // Sort sub-steps
+            const sortedSubSteps = [...subStepsByMainStep[mainStepNumber]].sort((a, b) => {
+                const subNumA = parseFloat(a.sub_step_number || a.subStepNumber || 0);
+                const subNumB = parseFloat(b.sub_step_number || b.subStepNumber || 0);
+                return subNumA - subNumB;
             });
             
-            const subStepsContainer = document.createElement('div');
-            subStepsContainer.className = 'sub-steps-container mt-3';
-            
+            // Create elements for each sub-step
             sortedSubSteps.forEach(subStep => {
                 const subStepNumber = subStep.sub_step_number || subStep.subStepNumber || '';
                 const subStepDesc = subStep.description || '';
@@ -311,7 +391,7 @@ function displaySteps(steps) {
                 const subStepElem = document.createElement('div');
                 
                 if (subStepType.toLowerCase() === 'qc') {
-                    subStepElem.className = 'qc-step';
+                    subStepElem.className = 'qc-step mb-2';
                     subStepElem.innerHTML = `
                         <div class="d-flex align-items-center">
                             <span class="badge bg-info me-2">QC</span>
@@ -319,7 +399,7 @@ function displaySteps(steps) {
                         </div>
                     `;
                 } else {
-                    subStepElem.className = 'sub-step';
+                    subStepElem.className = 'sub-step mb-2';
                     subStepElem.innerHTML = `
                         <div class="d-flex">
                             <div class="me-2">${subStepNumber}</div>
@@ -331,11 +411,9 @@ function displaySteps(steps) {
                 subStepsContainer.appendChild(subStepElem);
             });
             
-            stepElem.appendChild(subStepsContainer);
-        }
-        
-        stepsContainer.appendChild(stepElem);
-    });
+            mainStepElement.appendChild(subStepsContainer);
+        });
+    }
 }
 
 // Display packaging table

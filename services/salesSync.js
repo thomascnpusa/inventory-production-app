@@ -84,9 +84,10 @@ class SalesSyncService {
             try {
                 await client.query('BEGIN');
                 const hoursBack = 1;
-                const result = await amazonIntegration.syncAllMarketplaces(hoursBack);
+                const amazonClient = new amazonIntegration();
+                const result = await amazonClient.syncAllMarketplaces(hoursBack);
                 for (const marketplace of Object.keys(AMAZON_MARKETPLACES)) {
-                    const orders = await amazonIntegration.fetchOrders(marketplace, hoursBack);
+                    const orders = await amazonClient.fetchOrders(marketplace, hoursBack);
                     for (const order of orders) {
                         for (const item of order.OrderItems) {
                             if (item.SellerSKU) {
@@ -122,8 +123,14 @@ class SalesSyncService {
         try {
             await this.syncShopify();
             await this.syncAmazon();
-            await mapping.suggestMappings('shopify'); // Suggest for Shopify too
-            // ... (rest unchanged)
+            await mapping.suggestMappings('shopify');
+            
+            // Add FBA inventory sync
+            console.log('Starting FBA inventory sync...');
+            const amazonClient = new amazonIntegration();
+            await amazonClient.fetchFBAInventory();
+            console.log('FBA inventory sync completed');
+            
         } catch (error) {
             console.error('Sales sync failed:', error);
             throw error;

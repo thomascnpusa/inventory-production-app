@@ -4,10 +4,10 @@ const { authenticateToken, checkPermission } = require('../middleware/auth');
 
 // Main inventory route - handles both type filtering and search
 router.get('/', authenticateToken, checkPermission('view_inventory'), async (req, res) => {
-    const { search, type } = req.query;
+    const { search, type, page = 1, limit = 50, sortBy = 'sku', sortDir = 'asc' } = req.query;
     
     // Debug logging
-    console.log('GET /api/inventory request received with params:', { search, type });
+    console.log('GET /api/inventory request received with params:', { search, type, page, limit, sortBy, sortDir });
     console.log('pgPool availability check:', req.pgPool ? 'Available' : 'Not available');
     
     // Ensure pgPool is available
@@ -20,6 +20,9 @@ router.get('/', authenticateToken, checkPermission('view_inventory'), async (req
     }
     
     const pgPool = req.pgPool;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
     
     try {
         // Handle search parameter - used by the merge inventory feature
@@ -42,6 +45,11 @@ router.get('/', authenticateToken, checkPermission('view_inventory'), async (req
                         WHEN COUNT(ib.id) > 0 THEN COALESCE(SUM(ib.stock_level), 0)
                         ELSE COALESCE(ii.stock_level, 0)
                     END as total_stock,
+                    COALESCE(ii.fba_inventory, 0) as fba_inventory,
+                    (CASE
+                        WHEN COUNT(ib.id) > 0 THEN COALESCE(SUM(ib.stock_level), 0)
+                        ELSE ii.stock_level
+                    END + COALESCE(ii.fba_inventory, 0)) as total_available,
                     COALESCE(
                         (SELECT json_agg(
                             json_build_object(
@@ -63,14 +71,34 @@ router.get('/', authenticateToken, checkPermission('view_inventory'), async (req
                 FROM InventoryItems ii
                 LEFT JOIN InventoryBatches ib ON ii.id = ib.inventory_item_id
                 WHERE (ii.sku ILIKE $1 OR ii.name ILIKE $1)
+                AND ii.is_active = true
                 GROUP BY ii.id, ii.sku, ii.name, ii.type, ii.unit_type, ii.minimum_quantity
                 ORDER BY ii.sku
-                LIMIT 50
+                LIMIT $2 OFFSET $3
             `;
             
-            const result = await pgPool.query(searchQuery, [`%${search}%`]);
-            console.log(`Found ${result.rows.length} items for search term: "${search}"`);
-            return res.json(result.rows);
+            const countQuery = `
+                SELECT COUNT(DISTINCT ii.id) 
+                FROM InventoryItems ii 
+                WHERE (ii.sku ILIKE $1 OR ii.name ILIKE $1)
+                AND ii.is_active = true
+            `;
+            
+            const result = await pgPool.query(searchQuery, [`%${search}%`, limitNum, offset]);
+            const countResult = await pgPool.query(countQuery, [`%${search}%`]);
+            const totalItems = parseInt(countResult.rows[0].count);
+            
+            console.log(`Found ${result.rows.length} items for search term: "${search}" (page ${pageNum} of ${Math.ceil(totalItems/limitNum)})`);
+            
+            return res.json({
+                items: result.rows,
+                pagination: {
+                    currentPage: pageNum,
+                    totalPages: Math.ceil(totalItems / limitNum),
+                    totalItems: totalItems,
+                    limit: limitNum
+                }
+            });
         }
         
         // Handle type parameter - used by the product dropdown
@@ -88,6 +116,11 @@ router.get('/', authenticateToken, checkPermission('view_inventory'), async (req
                     WHEN COUNT(ib.id) > 0 THEN COALESCE(SUM(ib.stock_level), 0)
                     ELSE ii.stock_level
                 END as total_stock,
+                COALESCE(ii.fba_inventory, 0) as fba_inventory,
+                (CASE
+                    WHEN COUNT(ib.id) > 0 THEN COALESCE(SUM(ib.stock_level), 0)
+                    ELSE ii.stock_level
+                END + COALESCE(ii.fba_inventory, 0)) as total_available,
                 COALESCE(
                     (SELECT json_agg(
                         json_build_object(
@@ -108,20 +141,62 @@ router.get('/', authenticateToken, checkPermission('view_inventory'), async (req
                 ) as batches
             FROM InventoryItems ii
             LEFT JOIN InventoryBatches ib ON ii.id = ib.inventory_item_id
+            WHERE ii.is_active = true
+        `;
+        
+        let countQuery = `
+            SELECT COUNT(*) FROM InventoryItems ii WHERE ii.is_active = true
         `;
         
         const queryParams = [];
+        const countParams = [];
         
         if (type) {
-            query += ` WHERE ii.type = $1`;
+            query += ` AND LOWER(ii.type) = LOWER($1)`;
+            countQuery += ` AND LOWER(ii.type) = LOWER($1)`;
             queryParams.push(type);
+            countParams.push(type);
         }
         
-        query += ` GROUP BY ii.id ORDER BY ii.name`;
+        query += ` GROUP BY ii.id`;
+        
+        // Add sorting
+        if (sortBy && ['sku', 'name', 'type', 'total_stock', 'fba_inventory', 'minimum_quantity', 'unit_type'].includes(sortBy)) {
+            if (sortBy === 'total_stock') {
+                query += ` ORDER BY CASE 
+                    WHEN COUNT(ib.id) > 0 THEN COALESCE(SUM(ib.stock_level), 0)
+                    ELSE ii.stock_level
+                END ${sortDir === 'desc' ? 'DESC' : 'ASC'}`;
+            } else if (sortBy === 'fba_inventory') {
+                query += ` ORDER BY COALESCE(ii.fba_inventory, 0) ${sortDir === 'desc' ? 'DESC' : 'ASC'}`;
+            } else {
+                query += ` ORDER BY ii.${sortBy} ${sortDir === 'desc' ? 'DESC' : 'ASC'}`;
+            }
+        } else {
+            query += ` ORDER BY ii.sku ASC`;
+        }
+        
+        // Add pagination
+        query += ` LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+        queryParams.push(limitNum, offset);
         
         const result = await pgPool.query(query, queryParams);
-        console.log(`Found ${result.rows.length} inventory items${type ? ` with type "${type}"` : ''}`);
-        return res.json(result.rows);
+        const countResult = await pgPool.query(countQuery, countParams);
+        
+        const totalItems = parseInt(countResult.rows[0].count);
+        const totalPages = Math.ceil(totalItems / limitNum);
+        
+        console.log(`Found ${result.rows.length} inventory items${type ? ` with type "${type}"` : ''} (page ${pageNum} of ${totalPages})`);
+        
+        return res.json({
+            items: result.rows,
+            pagination: {
+                currentPage: pageNum,
+                totalPages: totalPages,
+                totalItems: totalItems,
+                limit: limitNum
+            }
+        });
     } catch (error) {
         console.error('Inventory query error:', error);
         return res.status(500).json({ 
